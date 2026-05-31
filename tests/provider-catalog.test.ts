@@ -157,6 +157,23 @@ describe('provider catalog', () => {
     }
   });
 
+  it('keeps provider credential env vars scoped to the owning provider', () => {
+    const expectedCredentialEnvVars: Record<string, string[] | undefined> = {
+      groq: ['GROQ_API_KEY'],
+      ollama: undefined,
+      openai: ['OPENAI_API_KEY'],
+      opengateway: ['OPENGATEWAY_API_KEY'],
+      openrouter: ['OPENROUTER_API_KEY'],
+    };
+
+    for (const definition of listProviderDefinitions()) {
+      expect(
+        definition.credentialEnvVars,
+        `${definition.id} should not borrow another provider's credential env vars`
+      ).toEqual(expectedCredentialEnvVars[definition.id]);
+    }
+  });
+
   it('keeps global model TOML free of provider pricing metadata', () => {
     for (const file of catalogTomlFiles().filter((path) => path.includes(`${join('catalog', 'models')}`))) {
       const content = readFileSync(file, 'utf-8');
@@ -212,7 +229,7 @@ describe('provider catalog', () => {
   it('fans out top-level credential env vars into normalized provider metadata', () => {
     const opengateway = getProviderDefinition('opengateway');
 
-    expect(opengateway?.credentialEnvVars).toEqual(['OPENGATEWAY_API_KEY', 'OPENAI_API_KEY']);
+    expect(opengateway?.credentialEnvVars).toEqual(['OPENGATEWAY_API_KEY']);
     expect(opengateway?.setup?.credentialEnvVars).toEqual(opengateway?.credentialEnvVars);
     expect(opengateway?.validation?.credentialEnvVars).toEqual(opengateway?.credentialEnvVars);
     expect(opengateway?.preset?.apiKeyEnvVars).toEqual(opengateway?.credentialEnvVars);

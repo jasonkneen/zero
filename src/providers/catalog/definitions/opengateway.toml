@@ -11,7 +11,7 @@ supportsModelRouting = true
 apiKeyLabel = "OpenGateway API key"
 apiKeyPlaceholder = "ogw_live_..."
 apiKeyRequired = true
-credentialEnvVars = ["OPENGATEWAY_API_KEY", "OPENAI_API_KEY"]
+credentialEnvVars = ["OPENGATEWAY_API_KEY"]
 
 [setup]
 requiresAuth = true
