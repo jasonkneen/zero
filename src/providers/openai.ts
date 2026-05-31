@@ -1,24 +1,31 @@
 import OpenAI from 'openai';
 import type { Provider, Message, ToolDefinition, StreamEvent } from './types';
+import type { MaxTokensField } from './catalog/types';
 
 interface OpenAIProviderOptions {
   apiKey: string;
   baseURL?: string;
   model: string;
   defaultHeaders?: Record<string, string | null>;
+  maxTokensField?: MaxTokensField;
+  removeBodyFields?: string[];
 }
 
 export class OpenAIProvider implements Provider {
   private client: OpenAI;
   private model: string;
+  private maxTokensField: MaxTokensField;
+  private removeBodyFields: Set<string>;
 
-  constructor({ apiKey, baseURL, model, defaultHeaders }: OpenAIProviderOptions) {
+  constructor({ apiKey, baseURL, model, defaultHeaders, maxTokensField, removeBodyFields }: OpenAIProviderOptions) {
     this.client = new OpenAI({
       apiKey,
       baseURL: baseURL || 'https://api.openai.com/v1',
       defaultHeaders,
     });
     this.model = model;
+    this.maxTokensField = maxTokensField ?? 'max_tokens';
+    this.removeBodyFields = new Set(removeBodyFields ?? []);
   }
 
   async *streamCompletion(
@@ -50,14 +57,33 @@ export class OpenAIProvider implements Provider {
         }))
       : undefined;
 
+    // Build request body
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages: openaiMessages,
+      tools: openaiTools,
+      stream: true,
+    };
+
+    // Strip configured body fields
+    for (const field of this.removeBodyFields) {
+      delete body[field];
+    }
+
+    // Validate required fields before sending
+    if (!body.model) {
+      throw new Error('Provider request missing required field: model');
+    }
+    if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
+      throw new Error('Provider request missing required field: messages');
+    }
+
     let stream;
     try {
-      stream = await this.client.chat.completions.create({
-        model: this.model,
-        messages: openaiMessages as any,
-        tools: openaiTools,
-        stream: true,
-      });
+      stream = await this.client.chat.completions.create(
+        body as Parameters<typeof this.client.chat.completions.create>[0],
+        { timeout: 120_000 } // 2 minute timeout
+      );
     } catch (err: any) {
       const message = getDetailedErrorMessage(err);
       if (message.includes('401') || message.toLowerCase().includes('invalid') || message.toLowerCase().includes('unauthorized')) {
@@ -71,9 +97,10 @@ export class OpenAIProvider implements Provider {
 
     const toolCallAccumulators = new Map<number, { 
       id: string; 
-      name: string; 
+      name: string;
       arguments: string;
       started: boolean;
+      ended: boolean;
     }>();
 
     try {
@@ -98,17 +125,15 @@ export class OpenAIProvider implements Provider {
 
             let acc = toolCallAccumulators.get(tc.index);
             if (!acc) {
-              acc = { id: '', name: '', arguments: '', started: false };
+              acc = { id: '', name: '', arguments: '', started: false, ended: false };
               toolCallAccumulators.set(tc.index, acc);
             }
 
             // If we already had data at this index and now get a new id, 
             // the previous tool call is complete.
             if (tc.id && acc.id && acc.id !== tc.id) {
-              if (acc.id) {
-                yield { type: 'tool-call-end', id: acc.id };
-              }
-              acc = { id: '', name: '', arguments: '', started: false };
+              yield { type: 'tool-call-end', id: acc.id };
+              acc = { id: '', name: '', arguments: '', started: false, ended: false };
               toolCallAccumulators.set(tc.index, acc);
             }
 
@@ -116,11 +141,14 @@ export class OpenAIProvider implements Provider {
             if (tc.function?.name) acc.name = tc.function.name;
             if (tc.function?.arguments) {
               acc.arguments += tc.function.arguments;
-              yield {
-                type: 'tool-call-delta',
-                id: acc.id || `pending-${tc.index}`,
-                argumentsFragment: tc.function.arguments,
-              };
+              // Only yield deltas once we have the real id
+              if (acc.id) {
+                yield {
+                  type: 'tool-call-delta',
+                  id: acc.id,
+                  argumentsFragment: tc.function.arguments,
+                };
+              }
             }
 
             // Emit start event the first time we have both id and name
@@ -142,8 +170,9 @@ export class OpenAIProvider implements Provider {
         // If the model signaled it's done with tool calls, close any open ones
         if (finishReason === 'tool_calls') {
           for (const [_, acc] of toolCallAccumulators) {
-            if (acc.id) {
+            if (acc.id && !acc.ended) {
               yield { type: 'tool-call-end', id: acc.id };
+              acc.ended = true;
             }
           }
         }
@@ -151,8 +180,9 @@ export class OpenAIProvider implements Provider {
 
       // End of stream - close any remaining open tool calls
       for (const [_, acc] of toolCallAccumulators) {
-        if (acc.id) {
+        if (acc.id && !acc.ended) {
           yield { type: 'tool-call-end', id: acc.id };
+          acc.ended = true;
         }
       }
 
@@ -175,18 +205,17 @@ function getDetailedErrorMessage(err: any): string {
   if (err.error) {
     if (typeof err.error === 'string') return err.error;
     if (err.error.message) return err.error.message;
-    try { return JSON.stringify(err.error); } catch {}
+    try { return JSON.stringify(err.error); } catch { return String(err.error); }
   }
 
   if (err.response?.data) {
     const data = err.response.data;
     if (data.error?.message) return data.error.message;
     if (typeof data.error === 'string') return data.error;
-    try { return JSON.stringify(data); } catch {}
+    try { return JSON.stringify(data); } catch { return '[unserializable response data]'; }
   }
 
   if (err.cause?.message) return err.cause.message;
 
   return err.message || String(err);
 }
-

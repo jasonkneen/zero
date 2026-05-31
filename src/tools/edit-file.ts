@@ -15,6 +15,11 @@ export const editFileTool: Tool = {
   async execute(args) {
     const { path, old_string, new_string } = EditFileParams.parse(args);
 
+    // Detect no-op edits
+    if (old_string === new_string) {
+      return `No-op edit: old_string and new_string are identical in ${path}.`;
+    }
+
     try {
       const content = await readFile(path, 'utf-8');
 
@@ -22,7 +27,14 @@ export const editFileTool: Tool = {
         return `Error: Could not find the exact string to replace in ${path}.`;
       }
 
-      const newContent = content.replace(old_string, new_string);
+      // Warn if multiple matches exist
+      const matchCount = content.split(old_string).length - 1;
+      if (matchCount > 1) {
+        return `Error: Found ${matchCount} occurrences of the string in ${path}. Please provide a more specific string to match a single occurrence.`;
+      }
+
+      // Use function replacement to avoid $&/$'/$` pattern expansion
+      const newContent = content.replace(old_string, () => new_string);
       await writeFile(path, newContent, 'utf-8');
 
       return `Successfully edited ${path}.`;

@@ -1,0 +1,31 @@
+# OpenAI reasoning models
+
+[[model]]
+id = "o1"
+name = "o1"
+ownerProviderId = "openai"
+tier = "first-party"
+description = "OpenAI reasoning model"
+classification = ["chat", "reasoning", "coding"]
+contextWindow = 200000
+maxOutputTokens = 100000
+capabilities.supportsVision = false
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = true
+
+[[model]]
+id = "o1-mini"
+name = "o1-mini"
+ownerProviderId = "openai"
+tier = "first-party"
+description = "OpenAI small reasoning model"
+classification = ["chat", "reasoning"]
+contextWindow = 128000
+maxOutputTokens = 65536
+capabilities.supportsVision = false
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = true

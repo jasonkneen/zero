@@ -19,12 +19,15 @@ export const bashTool: Tool = {
         cwd: cwd || process.cwd(),
         shell: true,
         timeout: 120_000, // 2 minutes
+        reject: false, // Don't throw on non-zero exit
       });
 
       let output = '';
+      if (result.exitCode !== 0) {
+        output += `[Command failed with exit code ${result.exitCode}]\n`;
+      }
       if (result.stdout) output += `stdout:\n${result.stdout}\n`;
       if (result.stderr) output += `stderr:\n${result.stderr}\n`;
-      if (result.exitCode !== 0) output += `Exit code: ${result.exitCode}`;
 
       return output.trim() || 'Command completed with no output.';
     } catch (err: any) {

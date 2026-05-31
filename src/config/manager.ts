@@ -3,7 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import type { ZeroConfig, ProviderProfile } from './types';
 
-const CONFIG_DIR = join(homedir(), '.config', 'zero');
+const CONFIG_DIR = process.env.ZERO_CONFIG_DIR || join(homedir(), '.config', 'zero');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 
 function ensureConfigDir() {
@@ -40,6 +40,10 @@ export class ConfigManager {
   private config: ZeroConfig;
 
   constructor() {
+    this.config = readConfig();
+  }
+
+  reload(): void {
     this.config = readConfig();
   }
 
@@ -109,12 +113,16 @@ export class ConfigManager {
       };
     }
 
-    // Fallback to env vars
-    if (process.env.OPENAI_BASE_URL || process.env.OPENAI_MODEL) {
+    // Fallback to env vars (match provider.ts behavior)
+    const envApiKey = process.env.OPENAI_API_KEY;
+    const envBaseURL = process.env.OPENAI_BASE_URL;
+    const envModel = process.env.OPENAI_MODEL;
+
+    if (envApiKey || envBaseURL || envModel) {
       return {
-        baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
-        apiKey: process.env.OPENAI_API_KEY,
-        model: process.env.OPENAI_MODEL || 'gpt-4o',
+        baseURL: envBaseURL || 'https://api.openai.com/v1',
+        apiKey: envApiKey,
+        model: envModel || 'gpt-4o',
       };
     }
 

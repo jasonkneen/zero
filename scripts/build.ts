@@ -2,8 +2,8 @@ import { Glob } from 'bun';
 import { mkdirSync } from 'fs';
 
 const catalogFiles = [
-  ...new Glob('src/providers/catalog/definitions/*.json').scanSync('.'),
-  ...new Glob('src/providers/catalog/models/*.json').scanSync('.'),
+  ...new Glob('src/providers/catalog/definitions/*.toml').scanSync('.'),
+  ...new Glob('src/providers/catalog/models/*.toml').scanSync('.'),
 ];
 
 mkdirSync('.zero-build', { recursive: true });

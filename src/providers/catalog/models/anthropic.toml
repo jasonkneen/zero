@@ -1,0 +1,16 @@
+# Anthropic Claude models
+
+[[model]]
+id = "claude-sonnet-4"
+name = "Claude Sonnet 4"
+ownerProviderId = "anthropic"
+tier = "first-party"
+description = "Anthropic balanced model"
+classification = ["chat", "vision", "coding"]
+contextWindow = 200000
+maxOutputTokens = 64000
+capabilities.supportsVision = true
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = true

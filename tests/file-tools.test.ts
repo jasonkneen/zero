@@ -59,11 +59,13 @@ describe('editFileTool', () => {
     expect(result).toContain('Could not find the exact string');
   });
 
-  it('only replaces the first occurrence', async () => {
+  it('rejects when multiple occurrences exist', async () => {
     const file = join(dir, 'dup.txt');
     await writeFile(file, 'x\nx\n', 'utf-8');
 
-    await editFileTool.execute({ path: file, old_string: 'x', new_string: 'y' });
-    expect(await readFile(file, 'utf-8')).toBe('y\nx\n');
+    const result = await editFileTool.execute({ path: file, old_string: 'x', new_string: 'y' });
+    expect(result).toContain('2 occurrences');
+    // File should not be modified
+    expect(await readFile(file, 'utf-8')).toBe('x\nx\n');
   });
 });

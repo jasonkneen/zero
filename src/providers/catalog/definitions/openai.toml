@@ -1,0 +1,43 @@
+# OpenAI - Direct API access
+# First-party provider: auto-exposes all global models
+
+id = "openai"
+name = "OpenAI"
+kind = "provider"
+description = "OpenAI direct API"
+category = "hosted"
+baseURL = "https://api.openai.com/v1"
+defaultModel = "gpt-4o"
+isFirstParty = true
+apiKeyRequired = true
+
+[setup]
+requiresAuth = true
+authMode = "api-key"
+credentialEnvVars = ["OPENAI_API_KEY"]
+
+[transportConfig]
+kind = "openai-compatible"
+
+[catalog]
+source = "hybrid"
+discoveryCacheTtl = "1h"
+discoveryRefreshMode = "manual"
+allowManualRefresh = true
+
+[catalog.discovery]
+kind = "openai-compatible"
+requiresAuth = true
+path = "/models"
+
+[validation]
+kind = "credential-env"
+credentialEnvVars = ["OPENAI_API_KEY"]
+missingCredentialMessage = "OPENAI_API_KEY is required to use OpenAI directly."
+
+[preset]
+id = "openai"
+description = "OpenAI direct API"
+apiKeyEnvVars = ["OPENAI_API_KEY"]
+fallbackBaseUrl = "https://api.openai.com/v1"
+fallbackModel = "gpt-4o"

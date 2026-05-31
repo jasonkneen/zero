@@ -1,0 +1,43 @@
+# Ollama - Local models via Ollama
+# No auth required, auto-detectable on localhost
+
+id = "ollama"
+name = "Ollama"
+kind = "localhost"
+description = "Local models via Ollama"
+category = "local"
+baseURL = "http://localhost:11434/v1"
+defaultModel = "llama3.2"
+apiKeyRequired = false
+
+[setup]
+requiresAuth = false
+authMode = "none"
+
+[startup]
+autoDetectable = true
+probeReadiness = "openai-compatible-models"
+
+[transportConfig]
+kind = "openai-compatible"
+
+[catalog]
+source = "dynamic"
+discoveryCacheTtl = "5m"
+discoveryRefreshMode = "on-open"
+allowManualRefresh = true
+
+# Ollama models are discovered dynamically from /api/tags
+[catalog.discovery]
+kind = "ollama"
+requiresAuth = false
+
+[usage]
+supported = false
+silentlyIgnore = true
+
+[preset]
+id = "ollama"
+description = "Local Ollama models"
+fallbackBaseUrl = "http://localhost:11434/v1"
+fallbackModel = "llama3.2"

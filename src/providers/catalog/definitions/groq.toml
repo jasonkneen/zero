@@ -1,0 +1,77 @@
+# Groq - Fast inference gateway
+
+id = "groq"
+name = "Groq"
+kind = "gateway"
+description = "Fast inference with LPU hardware"
+category = "hosted"
+baseURL = "https://api.groq.com/openai/v1"
+defaultModel = "llama-3.3-70b-versatile"
+apiKeyRequired = true
+
+[setup]
+requiresAuth = true
+authMode = "api-key"
+credentialEnvVars = ["GROQ_API_KEY"]
+
+[transportConfig]
+kind = "openai-compatible"
+maxTokensField = "max_completion_tokens"
+removeBodyFields = ["store"]
+
+[catalog]
+source = "hybrid"
+discoveryCacheTtl = "30m"
+discoveryRefreshMode = "on-open"
+
+[catalog.discovery]
+kind = "openai-compatible"
+requiresAuth = true
+
+[[catalog.models]]
+id = "llama-3.3-70b-versatile"
+name = "Llama 3.3 70B"
+tier = "hosted"
+contextWindow = 131072
+maxOutputTokens = 32768
+capabilities.supportsFunctionCalling = true
+capabilities.supportsStreaming = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = false
+
+[catalog.models.cost]
+inputPerMillion = 0.59
+outputPerMillion = 0.79
+
+[[catalog.models]]
+id = "llama-3.1-8b-instant"
+name = "Llama 3.1 8B Instant"
+tier = "hosted"
+contextWindow = 131072
+maxOutputTokens = 8192
+capabilities.supportsFunctionCalling = true
+capabilities.supportsStreaming = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = false
+
+[catalog.models.cost]
+inputPerMillion = 0.05
+outputPerMillion = 0.08
+
+[[catalog.models]]
+globalModelId = "deepseek-v3"
+apiName = "deepseek-r1-distill-llama-70b"
+contextWindow = 131072
+maxOutputTokens = 16384
+capabilities.supportsReasoning = true
+
+[catalog.models.cost]
+inputPerMillion = 0.75
+outputPerMillion = 0.99
+
+[preset]
+id = "groq"
+description = "Groq fast inference"
+apiKeyEnvVars = ["GROQ_API_KEY"]
+fallbackBaseUrl = "https://api.groq.com/openai/v1"
+fallbackModel = "llama-3.3-70b-versatile"

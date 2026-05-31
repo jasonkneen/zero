@@ -1,0 +1,49 @@
+# OpenAI models - global catalog
+
+[[model]]
+id = "gpt-4o"
+name = "GPT-4o"
+ownerProviderId = "openai"
+tier = "first-party"
+description = "OpenAI flagship multimodal model"
+classification = ["chat", "vision", "coding"]
+contextWindow = 128000
+maxOutputTokens = 16384
+capabilities.supportsVision = true
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = false
+
+[[model]]
+id = "gpt-4o-mini"
+name = "GPT-4o Mini"
+ownerProviderId = "openai"
+tier = "first-party"
+description = "OpenAI small multimodal model"
+classification = ["chat", "vision"]
+contextWindow = 128000
+maxOutputTokens = 16384
+capabilities.supportsVision = true
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = false
+
+[[model]]
+id = "gpt-5.5"
+name = "GPT-5.5"
+ownerProviderId = "openai"
+tier = "first-party"
+description = "OpenAI next-gen model"
+classification = ["chat", "vision", "coding", "reasoning"]
+contextWindow = 1048576
+maxOutputTokens = 128000
+defaultTemperature = 1.0
+temperatureRange = { min = 0.0, max = 2.0 }
+capabilities.supportsVision = true
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = true
+capabilities.supportsTemperature = true

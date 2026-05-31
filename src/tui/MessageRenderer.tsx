@@ -14,7 +14,6 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({ content }) => 
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match;
-  let blockIndex = 0;
 
   const matches: Array<{ index: number; lang: string; code: string; fullMatch: string }> = [];
 
@@ -83,7 +82,6 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({ content }) => 
     );
 
     lastIndex = m.index + m.fullMatch.length;
-    blockIndex++;
   }
 
   // Add remaining text after last code block (with paragraph formatting)

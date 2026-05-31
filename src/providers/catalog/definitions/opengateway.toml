@@ -1,0 +1,71 @@
+# OpenGateway - OpenAI-compatible gateway hosted by Gitlawb
+
+id = "opengateway"
+name = "OpenGateway"
+kind = "gateway"
+description = "OpenAI-compatible gateway hosted by Gitlawb"
+category = "aggregating"
+baseURL = "https://opengateway.gitlawb.com/v1"
+defaultModel = "mimo-v2.5-pro"
+supportsModelRouting = true
+apiKeyLabel = "OpenGateway API key"
+apiKeyPlaceholder = "ogw_live_..."
+apiKeyRequired = true
+
+[setup]
+requiresAuth = true
+authMode = "api-key"
+credentialEnvVars = ["OPENGATEWAY_API_KEY", "OPENAI_API_KEY"]
+
+[validation]
+kind = "credential-env"
+credentialEnvVars = ["OPENGATEWAY_API_KEY", "OPENAI_API_KEY"]
+missingCredentialMessage = "OPENGATEWAY_API_KEY is required to use OpenGateway."
+matchBaseUrlHosts = ["opengateway.gitlawb.com", "opengateway.fly.dev"]
+
+[transportConfig]
+kind = "openai-compatible"
+maxTokensField = "max_completion_tokens"
+removeBodyFields = ["store", "stream_options"]
+
+[transportConfig.authHeader]
+name = "authorization"
+scheme = "bearer"
+
+[catalog]
+source = "hybrid"
+discoveryCacheTtl = "1h"
+discoveryRefreshMode = "manual"
+allowManualRefresh = true
+
+[catalog.discovery]
+kind = "openai-compatible"
+requiresAuth = true
+path = "/models"
+
+# Native model to this gateway
+[[catalog.models]]
+id = "mimo-v2.5-pro"
+apiName = "mimo-v2.5-pro"
+name = "Mimo v2.5 Pro"
+tier = "hosted"
+
+# Global model with reduced limits
+[[catalog.models]]
+globalModelId = "gpt-4o"
+contextWindow = 32000
+maxOutputTokens = 4096
+
+[usage]
+supported = false
+
+[preset]
+id = "opengateway"
+description = "OpenGateway hosted models"
+apiKeyEnvVars = ["OPENGATEWAY_API_KEY"]
+fallbackBaseUrl = "https://opengateway.gitlawb.com/v1"
+fallbackModel = "mimo-v2.5-pro"
+
+[preset.badge]
+text = "FREE"
+color = "success"

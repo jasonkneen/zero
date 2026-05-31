@@ -14,14 +14,6 @@ export class ToolRegistry {
   getAll(): Tool[] {
     return Array.from(this.tools.values());
   }
-
-  getDefinitionsForProvider() {
-    return this.getAll().map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters.shape, // We'll convert properly later
-    }));
-  }
 }
 
 export const toolRegistry = new ToolRegistry();

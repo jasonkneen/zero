@@ -1,7 +1,7 @@
 export interface ProviderProfile {
   name: string;
   providerId?: string;
-  kind?: 'gateway' | 'provider' | 'custom';
+  kind?: 'provider' | 'gateway' | 'localhost' | 'custom';
   baseURL: string;
   apiKey?: string;
   model: string;

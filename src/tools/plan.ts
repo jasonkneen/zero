@@ -15,6 +15,9 @@ const UpdatePlanParams = z.object({
 type PlanItem = z.infer<typeof PlanItemSchema>;
 
 // In-memory plan storage for the current session
+// NOTE: This is module-level state. If multiple agent loops run in parallel,
+// they will share and overwrite each other's plans. This is acceptable for
+// single-agent usage but should be refactored for parallel agents.
 let currentPlan: PlanItem[] = [];
 
 function formatPlan(plan: PlanItem[]): string {

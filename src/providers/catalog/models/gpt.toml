@@ -1,0 +1,31 @@
+# OpenAI GPT models
+
+[[model]]
+id = "gpt-4o"
+name = "GPT-4o"
+ownerProviderId = "openai"
+tier = "first-party"
+description = "OpenAI flagship multimodal model"
+classification = ["chat", "vision", "coding"]
+contextWindow = 128000
+maxOutputTokens = 16384
+capabilities.supportsVision = true
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = false
+
+[[model]]
+id = "gpt-4o-mini"
+name = "GPT-4o Mini"
+ownerProviderId = "openai"
+tier = "first-party"
+description = "OpenAI small multimodal model"
+classification = ["chat", "vision"]
+contextWindow = 128000
+maxOutputTokens = 16384
+capabilities.supportsVision = true
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = false

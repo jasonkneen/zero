@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
-import { getProviderDefinition } from './catalog';
+import { getProviderDefinition, getModelsForProvider, resolveModel } from './catalog';
+import { buildAuthHeaders, resolveHeaders } from './auth';
 import type {
   ModelDefinition,
   ModelDiscoveryResult,
@@ -55,7 +56,9 @@ function readCache(): DiscoveryCache {
 
 function writeCache(cache: DiscoveryCache) {
   ensureCacheDir();
-  writeFileSync(cachePath(), JSON.stringify(cache, null, 2), 'utf-8');
+  const path = cachePath();
+  const data = JSON.stringify(cache, null, 2);
+  writeFileSync(path, data, 'utf-8');
 }
 
 function parseDuration(value: string | number | undefined): number {
@@ -63,7 +66,10 @@ function parseDuration(value: string | number | undefined): number {
   if (!value) return DEFAULT_CACHE_TTL_MS;
 
   const match = value.trim().match(/^(\d+)(m|h|d)$/);
-  if (!match) return DEFAULT_CACHE_TTL_MS;
+  if (!match) {
+    console.warn(`[providers] Unrecognized duration format: "${value}", using default 1h`);
+    return DEFAULT_CACHE_TTL_MS;
+  }
 
   const amount = Number(match[1]);
   const unit = match[2];
@@ -82,22 +88,7 @@ function cacheKey(definition: ProviderDefinition, apiKey?: string): string {
 }
 
 function staticModels(definition: ProviderDefinition): ResolvedModelDefinition[] {
-  return (definition.catalog?.models ?? definition.models ?? []).map((model) =>
-    resolveModel(model, definition)
-  );
-}
-
-function resolveModel(
-  model: ModelDefinition,
-  definition: ProviderDefinition
-): ResolvedModelDefinition {
-  return {
-    ...model,
-    apiName: model.apiName ?? model.id,
-    providerId: definition.id,
-    providerName: definition.name,
-    providerKind: definition.kind,
-  };
+  return getModelsForProvider(definition);
 }
 
 function mergeModels(
@@ -123,19 +114,27 @@ function discoveryUrl(definition: ProviderDefinition): string {
 }
 
 function discoveryHeaders(definition: ProviderDefinition, apiKey?: string): Record<string, string> {
-  const headers: Record<string, string> = {
+  const rawHeaders: Record<string, string | null> = {
     ...(definition.transportConfig?.headers ?? {}),
-    ...(definition.transportConfig?.openaiShim?.headers ?? {}),
   };
 
+  // Add auth header if needed
   if (apiKey && definition.catalog?.discovery?.requiresAuth !== false) {
-    const authHeader = definition.transportConfig?.openaiShim?.defaultAuthHeader ?? {
+    const authHeader = definition.transportConfig?.authHeader ?? {
       name: 'authorization',
       scheme: 'bearer' as const,
     };
-    headers[authHeader.name] = authHeader.scheme === 'raw' ? apiKey : `Bearer ${apiKey}`;
+    rawHeaders[authHeader.name] = authHeader.scheme === 'raw' ? apiKey : `Bearer ${apiKey}`;
   }
 
+  // Resolve env vars and filter nulls
+  const resolved = resolveHeaders(rawHeaders);
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(resolved)) {
+    if (value != null) {
+      headers[name] = value;
+    }
+  }
   return headers;
 }
 

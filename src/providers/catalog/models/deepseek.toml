@@ -1,0 +1,16 @@
+# DeepSeek models
+
+[[model]]
+id = "deepseek-v3"
+name = "DeepSeek V3"
+ownerProviderId = "deepseek"
+tier = "first-party"
+description = "DeepSeek general model"
+classification = ["chat", "coding"]
+contextWindow = 65536
+maxOutputTokens = 8192
+capabilities.supportsVision = false
+capabilities.supportsStreaming = true
+capabilities.supportsFunctionCalling = true
+capabilities.supportsJsonMode = true
+capabilities.supportsReasoning = false

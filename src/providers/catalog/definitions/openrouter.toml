@@ -1,0 +1,72 @@
+# OpenRouter - Multi-provider gateway
+
+id = "openrouter"
+name = "OpenRouter"
+kind = "gateway"
+description = "Multi-provider gateway with hundreds of models"
+category = "aggregating"
+baseURL = "https://openrouter.ai/api/v1"
+defaultModel = "openai/gpt-4o"
+apiKeyRequired = true
+
+[setup]
+requiresAuth = true
+authMode = "api-key"
+credentialEnvVars = ["OPENROUTER_API_KEY"]
+
+[transportConfig]
+kind = "openai-compatible"
+
+# Optional attribution headers
+[transportConfig.headers]
+HTTP-Referer = "$OPENROUTER_SITE_URL"
+X-OpenRouter-Title = "$OPENROUTER_SITE_NAME"
+
+[catalog]
+source = "hybrid"
+discoveryCacheTtl = "1h"
+discoveryRefreshMode = "manual"
+
+# OpenRouter uses /api/v1/models (full path from baseURL)
+[catalog.discovery]
+kind = "openai-compatible"
+requiresAuth = true
+path = "/models"
+
+# Curated static entries shown first
+[[catalog.models]]
+globalModelId = "gpt-4o"
+apiName = "openai/gpt-4o"
+contextWindow = 128000
+maxOutputTokens = 16384
+
+[catalog.models.cost]
+inputPerMillion = 2.50
+outputPerMillion = 10.00
+
+[[catalog.models]]
+globalModelId = "claude-sonnet-4"
+apiName = "anthropic/claude-sonnet-4"
+contextWindow = 200000
+maxOutputTokens = 64000
+
+[catalog.models.cost]
+inputPerMillion = 3.00
+outputPerMillion = 15.00
+
+[[catalog.models]]
+globalModelId = "deepseek-v3"
+apiName = "deepseek/deepseek-chat"
+contextWindow = 65536
+maxOutputTokens = 8192
+
+[catalog.models.cost]
+inputPerMillion = 0.14
+outputPerMillion = 0.28
+
+[preset]
+id = "openrouter"
+description = "OpenRouter multi-provider gateway"
+apiKeyEnvVars = ["OPENROUTER_API_KEY"]
+fallbackBaseUrl = "https://openrouter.ai/api/v1"
+fallbackModel = "openai/gpt-4o"

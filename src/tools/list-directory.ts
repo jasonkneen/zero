@@ -59,8 +59,26 @@ async function listDirRecursive(
       const fullPath = join(currentPath, dirent.name);
       const relPath = relative(root, fullPath);
 
-      if (dirent.isDirectory()) {
+      if (dirent.isDirectory() || dirent.isSymbolicLink()) {
         if (ignoreDirs.has(dirent.name)) continue;
+
+        // For symlinks, verify it's actually a directory
+        if (dirent.isSymbolicLink()) {
+          try {
+            const linkStat = await stat(fullPath);
+            if (!linkStat.isDirectory()) {
+              // Symlink points to a file, treat as file
+              const indent = '  '.repeat(currentDepth);
+              results.push(`${indent}📄 ${dirent.name} -> symlink`);
+              continue;
+            }
+          } catch {
+            // Broken symlink
+            const indent = '  '.repeat(currentDepth);
+            results.push(`${indent}❓ ${dirent.name} -> broken symlink`);
+            continue;
+          }
+        }
 
         const indent = '  '.repeat(currentDepth);
         results.push(`${indent}📁 ${dirent.name}/`);
@@ -70,12 +88,20 @@ async function listDirRecursive(
           results.push(...children);
         }
       } else {
+        // Skip ignored files
+        if (ignoreDirs.has(dirent.name)) continue;
+
         const indent = '  '.repeat(currentDepth);
         results.push(`${indent}📄 ${dirent.name}`);
       }
     }
-  } catch (e) {
-    // ignore permission errors on individual dirs
+  } catch (e: any) {
+    // Only ignore permission errors; log others
+    if (e.code === 'EACCES' || e.code === 'EPERM') {
+      // Permission denied - skip silently
+    } else {
+      console.warn(`[list-directory] Error reading ${currentPath}: ${e.message}`);
+    }
   }
 
   return results;
