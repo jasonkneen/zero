@@ -2,6 +2,7 @@
 import { TextAttributes, type KeyEvent } from '@opentui/core';
 import { useKeyboard, usePaste, useTerminalDimensions } from '@opentui/solid';
 import { For, Match, Show, Switch, createMemo, createSignal, onMount } from 'solid-js';
+import packageJson from '../../package.json';
 import { configManager } from '../config/manager';
 import { loadProviderConfig } from '../config/provider';
 import type { ProviderProfile } from '../config/types';
@@ -73,6 +74,7 @@ const colors = {
   error: '#ff6b6b',
   success: '#80d996',
 };
+const buildVersion = packageJson.version;
 
 function printable(event: KeyEvent): string | undefined {
   if (event.ctrl || event.meta || event.super) return undefined;
@@ -130,6 +132,7 @@ function commandHelp() {
   return [
     { type: 'system' as const, content: 'Available commands:' },
     { type: 'system' as const, content: '  /provider  Manage local provider profiles' },
+    { type: 'system' as const, content: '  /clear     Clear the display buffer' },
     { type: 'system' as const, content: '  /plan      Toggle plan mode styling' },
     { type: 'system' as const, content: '  /todo      Show or hide the todo rail' },
     { type: 'system' as const, content: '  /tools     Toggle tool calling' },
@@ -198,6 +201,11 @@ export function App(props: { onExit: () => void }) {
         setProviderCursor(0);
         setScreen('providers');
       },
+    },
+    {
+      name: '/clear',
+      detail: 'Clear the display buffer',
+      run: () => clearDisplay(),
     },
     {
       name: '/plan',
@@ -318,6 +326,12 @@ export function App(props: { onExit: () => void }) {
       setTodoRailHidden(false);
       setTodoRailOpen(true);
     }
+  }
+
+  function clearDisplay() {
+    setMessages([{ type: 'system', content: 'Display cleared.' }]);
+    setScrollOffset(0);
+    setCommandCursor(0);
   }
 
   function submitChat() {
@@ -623,6 +637,7 @@ export function App(props: { onExit: () => void }) {
   return (
     <box width="100%" height="100%" flexDirection="column" backgroundColor={colors.bg}>
       <Header
+        version={buildVersion}
         provider={providerName()}
         model={modelName()}
         usage={usage()}
@@ -679,12 +694,13 @@ export function App(props: { onExit: () => void }) {
   );
 }
 
-function Header(props: { provider: string; model: string; usage: Usage; total: number; mode: string }) {
+function Header(props: { version: string; provider: string; model: string; usage: Usage; total: number; mode: string }) {
   return (
     <box width="100%" height={3} flexDirection="column" backgroundColor={colors.surface} flexShrink={0}>
       <box width="100%" flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
         <text fg={colors.text} attributes={TextAttributes.BOLD}>
           zero
+          <span style={{ fg: colors.accent }}> v{props.version}</span>
           <span style={{ fg: colors.subtle }}> / local agent</span>
         </text>
         <text fg={colors.muted} wrapMode="none" truncate>

@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { ensureSolidTransformPlugin } from '@opentui/solid/bun-plugin';
+import packageJson from '../package.json';
 import { runHeadless } from './cli';
 import { configManager } from './config/manager';
 
@@ -14,7 +15,7 @@ async function startInteractiveTUI() {
 program
   .name('zero')
   .description('A clean terminal AI coding agent')
-  .version('0.1.0');
+  .version(packageJson.version);
 
 program
   .option('-p, --prompt <prompt>', 'Run in headless mode with the given prompt')
