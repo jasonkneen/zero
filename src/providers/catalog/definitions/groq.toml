@@ -23,10 +23,8 @@ removeBodyFields = ["store"]
 source = "hybrid"
 discoveryCacheTtl = "30m"
 discoveryRefreshMode = "on-open"
-
-[catalog.discovery]
-kind = "openai-compatible"
-requiresAuth = true
+discovery.kind = "openai-compatible"
+discovery.requiresAuth = true
 
 [[catalog.models]]
 id = "llama-3.3-70b-versatile"
@@ -38,10 +36,8 @@ capabilities.supportsFunctionCalling = true
 capabilities.supportsStreaming = true
 capabilities.supportsJsonMode = true
 capabilities.supportsReasoning = false
-
-[catalog.models.cost]
-inputPerMillion = 0.59
-outputPerMillion = 0.79
+cost.inputPerMillion = 0.59
+cost.outputPerMillion = 0.79
 
 [[catalog.models]]
 id = "llama-3.1-8b-instant"
@@ -53,10 +49,8 @@ capabilities.supportsFunctionCalling = true
 capabilities.supportsStreaming = true
 capabilities.supportsJsonMode = true
 capabilities.supportsReasoning = false
-
-[catalog.models.cost]
-inputPerMillion = 0.05
-outputPerMillion = 0.08
+cost.inputPerMillion = 0.05
+cost.outputPerMillion = 0.08
 
 [[catalog.models]]
 globalModelId = "deepseek-v3"
@@ -64,10 +58,8 @@ apiName = "deepseek-r1-distill-llama-70b"
 contextWindow = 131072
 maxOutputTokens = 16384
 capabilities.supportsReasoning = true
-
-[catalog.models.cost]
-inputPerMillion = 0.75
-outputPerMillion = 0.99
+cost.inputPerMillion = 0.75
+cost.outputPerMillion = 0.99
 
 [preset]
 id = "groq"

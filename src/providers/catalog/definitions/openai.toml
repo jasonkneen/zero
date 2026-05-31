@@ -24,11 +24,9 @@ source = "hybrid"
 discoveryCacheTtl = "1h"
 discoveryRefreshMode = "manual"
 allowManualRefresh = true
-
-[catalog.discovery]
-kind = "openai-compatible"
-requiresAuth = true
-path = "/models"
+discovery.kind = "openai-compatible"
+discovery.requiresAuth = true
+discovery.path = "/models"
 
 [validation]
 kind = "credential-env"

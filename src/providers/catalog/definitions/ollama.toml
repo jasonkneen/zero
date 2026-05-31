@@ -26,11 +26,9 @@ source = "dynamic"
 discoveryCacheTtl = "5m"
 discoveryRefreshMode = "on-open"
 allowManualRefresh = true
-
 # Ollama models are discovered dynamically from /api/tags
-[catalog.discovery]
-kind = "ollama"
-requiresAuth = false
+discovery.kind = "ollama"
+discovery.requiresAuth = false
 
 [usage]
 supported = false

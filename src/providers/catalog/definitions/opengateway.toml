@@ -27,21 +27,17 @@ matchBaseUrlHosts = ["opengateway.gitlawb.com", "opengateway.fly.dev"]
 kind = "openai-compatible"
 maxTokensField = "max_completion_tokens"
 removeBodyFields = ["store", "stream_options"]
-
-[transportConfig.authHeader]
-name = "authorization"
-scheme = "bearer"
+authHeader.name = "authorization"
+authHeader.scheme = "bearer"
 
 [catalog]
 source = "hybrid"
 discoveryCacheTtl = "1h"
 discoveryRefreshMode = "manual"
 allowManualRefresh = true
-
-[catalog.discovery]
-kind = "openai-compatible"
-requiresAuth = true
-path = "/models"
+discovery.kind = "openai-compatible"
+discovery.requiresAuth = true
+discovery.path = "/models"
 
 # Native model to this gateway
 [[catalog.models]]
@@ -65,7 +61,5 @@ description = "OpenGateway hosted models"
 apiKeyEnvVars = ["OPENGATEWAY_API_KEY"]
 fallbackBaseUrl = "https://opengateway.gitlawb.com/v1"
 fallbackModel = "mimo-v2.5-pro"
-
-[preset.badge]
-text = "FREE"
-color = "success"
+badge.text = "FREE"
+badge.color = "success"

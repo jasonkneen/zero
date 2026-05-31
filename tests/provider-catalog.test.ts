@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { existsSync, readFileSync, rmSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import {
   getGlobalModelDefinition,
@@ -37,7 +37,70 @@ function cleanupTestCacheDir(path: string): void {
   }
 }
 
+function catalogTomlFiles(): string[] {
+  const catalogRoot = join(import.meta.dir, '..', 'src', 'providers', 'catalog');
+  const definitionsDir = join(catalogRoot, 'definitions');
+  const modelsDir = join(catalogRoot, 'models');
+
+  return [
+    ...readdirSync(definitionsDir)
+      .filter((file) => file.endsWith('.toml'))
+      .map((file) => join(definitionsDir, file)),
+    ...readdirSync(modelsDir)
+      .filter((file) => file.endsWith('.toml'))
+      .map((file) => join(modelsDir, file)),
+    join(import.meta.dir, '..', 'example-model-addition.toml'),
+  ];
+}
+
+function catalogDocumentationAndTomlFiles(): string[] {
+  return [
+    join(import.meta.dir, '..', 'README.md'),
+    ...catalogTomlFiles(),
+  ];
+}
+
 describe('provider catalog', () => {
+  it('keeps model metadata in a single TOML block with dotted keys', () => {
+    const forbiddenModelSubtables = /^\s*\[(?:catalog\.models|model)\.(?:capabilities|cost|transportOverrides|temperatureRange)\]\s*$/m;
+
+    for (const file of catalogTomlFiles()) {
+      const content = readFileSync(file, 'utf-8');
+      expect(content, `${file} should use dotted model keys instead of nested model sub-tables`)
+        .not.toMatch(forbiddenModelSubtables);
+    }
+  });
+
+  it('keeps provider metadata sections in single TOML blocks with dotted keys', () => {
+    const forbiddenProviderSubtables = /^\s*\[(?:transportConfig\.(?:authHeader|headers)|catalog\.discovery|preset\.badge|setup\..+|validation\..+|usage\..+)\]\s*$/m;
+
+    for (const file of catalogDocumentationAndTomlFiles()) {
+      const content = readFileSync(file, 'utf-8');
+      expect(content, `${file} should use dotted keys instead of nested provider sub-tables`)
+        .not.toMatch(forbiddenProviderSubtables);
+    }
+  });
+
+  it('documents the provider catalog model schema without nested model sub-tables', () => {
+    const readme = readFileSync(join(import.meta.dir, '..', 'README.md'), 'utf-8');
+
+    expect(readme).toContain('entry must stay as one model block');
+    expect(readme).toContain('contextWindow');
+    expect(readme).toContain('maxOutputTokens');
+    expect(readme).toContain('temperatureRange.min');
+    expect(readme).toContain('temperatureRange.max');
+    expect(readme).toContain('cost.inputPerMillion');
+    expect(readme).toContain('cost.outputPerMillion');
+    expect(readme).toContain('cost.cachePerMillion');
+    expect(readme).toContain('capabilities.supportsVision');
+    expect(readme).toContain('transportOverrides.maxTokensField');
+    expect(readme).toContain('| Field | Required | Accepted values or behavior |');
+    expect(readme).toContain('Keep `transportConfig`, `transportConfig.authHeader`, and');
+    expect(readme).toContain('Keep `catalog` and `catalog.discovery` in one `[catalog]` block');
+    expect(readme).toContain('Keep `preset` and `preset.badge` in one `[preset]` block');
+    expect(readme).not.toMatch(/^\s*\[(?:catalog\.models|model)\.(?:capabilities|cost|transportOverrides|temperatureRange)\]\s*$/m);
+  });
+
   it('auto-discovers provider and gateway definitions', () => {
     const definitions = listProviderDefinitions();
     const opengateway = getProviderDefinition('opengateway');
@@ -46,6 +109,32 @@ describe('provider catalog', () => {
     expect(opengateway?.kind).toBe('gateway');
     expect(opengateway?.baseURL).toBe('https://opengateway.gitlawb.com/v1');
     expect(opengateway?.defaultModel).toBe('mimo-v2.5-pro');
+  });
+
+  it('parses dotted TOML provider sections as nested config objects', () => {
+    const opengateway = getProviderDefinition('opengateway');
+    const openrouter = getProviderDefinition('openrouter');
+
+    expect(opengateway?.transportConfig?.authHeader).toEqual({
+      name: 'authorization',
+      scheme: 'bearer',
+    });
+    expect(opengateway?.catalog?.discovery).toEqual({
+      kind: 'openai-compatible',
+      requiresAuth: true,
+      path: '/models',
+    });
+    expect(opengateway?.preset?.badge).toEqual({
+      text: 'FREE',
+      color: 'success',
+    });
+
+    expect(openrouter?.transportConfig?.headers).toEqual({
+      'HTTP-Referer': '$OPENROUTER_SITE_URL',
+      'X-OpenRouter-Title': '$OPENROUTER_SITE_NAME',
+    });
+    expect(openrouter?.catalog?.discovery?.kind).toBe('openai-compatible');
+    expect(openrouter?.catalog?.discovery?.path).toBe('/models');
   });
 
   it('auto-discovers localhost provider definitions', () => {
