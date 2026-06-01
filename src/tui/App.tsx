@@ -21,6 +21,19 @@ type Usage = {
   completionTokens: number;
 };
 
+type ProviderHeaderInfo = {
+  name: string;
+  model: string;
+};
+
+function getProviderHeaderInfo(): ProviderHeaderInfo {
+  const activeProfile = configManager.getActiveProvider();
+  return {
+    name: activeProfile?.name || (process.env.ZERO_PROVIDER_COMMAND ? 'command' : 'env'),
+    model: activeProfile?.model || process.env.OPENAI_MODEL || 'default',
+  };
+}
+
 // Map low-level errors back to actionable guidance for the user. The full
 // error object is still surfaced separately when debug mode is on.
 function toFriendlyError(err: any): string {
@@ -100,6 +113,7 @@ export const App: React.FC = () => {
   const [todoRailHidden, setTodoRailHidden] = useState(false);
   const planLengthRef = useRef(0);
   const todoRailHiddenRef = useRef(false);
+  const [providerHeaderInfo, setProviderHeaderInfo] = useState<ProviderHeaderInfo>(() => getProviderHeaderInfo());
 
   // Command suggestions
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -118,9 +132,8 @@ export const App: React.FC = () => {
   }, [input]);
 
   // Current provider info for the input bar (Grok Build style)
-  const activeProfile = configManager.getActiveProvider();
-  const currentProviderName = activeProfile?.name || (process.env.ZERO_PROVIDER_COMMAND ? 'command' : 'env');
-  const currentModel = activeProfile?.model || process.env.OPENAI_MODEL || 'default';
+  const currentProviderName = providerHeaderInfo.name;
+  const currentModel = providerHeaderInfo.model;
   const totalTokens = usage.promptTokens + usage.completionTokens;
   const hasPlanItems = plan.length > 0;
   const hasActivePlanItems = plan.some((item) => item.status !== 'completed');
@@ -414,6 +427,7 @@ export const App: React.FC = () => {
   const handleProviderSelected = (name: string) => {
     const success = configManager.setActiveProvider(name);
     if (success) {
+      setProviderHeaderInfo(getProviderHeaderInfo());
       setMessages((prev) => [...prev, { type: 'system', content: `Switched to provider: ${name}` }]);
     }
     setScreen('chat');
@@ -435,6 +449,7 @@ export const App: React.FC = () => {
       const switched = configManager.setActiveProvider(providerName);
 
       if (switched) {
+        setProviderHeaderInfo(getProviderHeaderInfo());
         setMessages((prev) => [
           ...prev,
           { type: 'system', content: `Added and switched to provider: ${providerName}` },

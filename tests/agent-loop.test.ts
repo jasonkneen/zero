@@ -114,4 +114,44 @@ describe('runAgent tool-call flow', () => {
     expect(usageEvents).toEqual([{ promptTokens: 10, completionTokens: 2 }]);
     expect(planSnapshots).toEqual([[], ['track this']]);
   });
+
+  it('does not leak plan update callbacks across separate runs', async () => {
+    const firstProvider = new MockProvider([
+      [
+        { type: 'tool-call-start', id: 'call_1', name: 'update_plan' },
+        {
+          type: 'tool-call-delta',
+          id: 'call_1',
+          argumentsFragment: JSON.stringify({
+            plan: [{ id: '1', content: 'first plan', status: 'pending' }],
+          }),
+        },
+        { type: 'tool-call-end', id: 'call_1' },
+      ],
+      [{ type: 'text', content: 'first done' }],
+    ]);
+    const secondProvider = new MockProvider([
+      [
+        { type: 'tool-call-start', id: 'call_2', name: 'update_plan' },
+        {
+          type: 'tool-call-delta',
+          id: 'call_2',
+          argumentsFragment: JSON.stringify({
+            plan: [{ id: '2', content: 'second plan', status: 'pending' }],
+          }),
+        },
+        { type: 'tool-call-end', id: 'call_2' },
+      ],
+      [{ type: 'text', content: 'second done' }],
+    ]);
+
+    const planSnapshots: string[][] = [];
+
+    await runAgent('first', firstProvider, {
+      onPlanUpdate: (plan) => planSnapshots.push(plan.map((item) => item.content)),
+    });
+    await runAgent('second', secondProvider, {});
+
+    expect(planSnapshots).toEqual([[], ['first plan']]);
+  });
 });

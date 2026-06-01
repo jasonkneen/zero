@@ -2,7 +2,7 @@ import type { Provider } from '../providers/types';
 import type { ToolCall, ToolResult } from '../tools/types';
 import { toolRegistry } from '../tools';
 import { DEFAULT_SYSTEM_PROMPT, PLAN_MODE_SYSTEM_PROMPT } from './prompts';
-import { clearPlan, getCurrentPlan, setPlanUpdateHandler, type PlanItem } from '../tools/plan';
+import { clearPlan, getCurrentPlan, type PlanItem } from '../tools/plan';
 import { z } from 'zod';
 
 export interface AgentOptions {
@@ -43,9 +43,6 @@ export async function runAgent(
   // Clear any previous plan when starting a new task
   clearPlan();
   onPlanUpdate?.(getCurrentPlan());
-  const previousPlanUpdateHandler = setPlanUpdateHandler(() => {
-    onPlanUpdate?.(getCurrentPlan());
-  });
 
   const systemPrompt = planMode ? PLAN_MODE_SYSTEM_PROMPT : DEFAULT_SYSTEM_PROMPT;
 
@@ -57,7 +54,6 @@ export async function runAgent(
   const tools = toolRegistry.getAll();
   let finalAnswer = '';
 
-  try {
   for (let turn = 0; turn < maxTurns; turn++) {
     const toolDefinitions = (toolsEnabled && tools.length > 0)
       ? tools.map(t => {
@@ -205,7 +201,10 @@ export async function runAgent(
         onToolResult({ toolCallId: tc.id, result });
       }
 
-      tool?.onAfterExecute?.(result);
+      const effects = tool?.onAfterExecute?.(result);
+      if (effects?.planUpdated) {
+        onPlanUpdate?.(getCurrentPlan());
+      }
 
       return { toolCallId: tc.id, result };
     });
@@ -223,7 +222,4 @@ export async function runAgent(
   }
 
   return finalAnswer || 'Agent reached maximum number of turns without a final answer.';
-  } finally {
-    setPlanUpdateHandler(previousPlanUpdateHandler);
-  }
 }

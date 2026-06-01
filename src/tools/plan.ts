@@ -16,7 +16,6 @@ type PlanItem = z.infer<typeof PlanItemSchema>;
 
 // In-memory plan storage for the current session
 let currentPlan: PlanItem[] = [];
-let onPlanUpdated: (() => void) | undefined;
 
 function formatPlan(plan: PlanItem[]): string {
   if (plan.length === 0) {
@@ -61,7 +60,7 @@ The plan should be clear, actionable, and ordered. Keep it up to date as you wor
     return formatPlan(currentPlan);
   },
   onAfterExecute() {
-    onPlanUpdated?.();
+    return { planUpdated: true };
   },
 };
 
@@ -73,12 +72,6 @@ export function getCurrentPlan(): PlanItem[] {
 // Helper to clear the plan (useful for new conversations)
 export function clearPlan() {
   currentPlan = [];
-}
-
-export function setPlanUpdateHandler(handler: (() => void) | undefined) {
-  const previous = onPlanUpdated;
-  onPlanUpdated = handler;
-  return previous;
 }
 
 // Export the schema type for potential future use in the TUI
