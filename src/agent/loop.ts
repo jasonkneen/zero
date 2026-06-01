@@ -185,7 +185,8 @@ export async function runAgent(
         onToolResult({ toolCallId: tc.id, result });
       }
 
-      if (tc.name === 'update_plan') {
+      const effects = tool?.onAfterExecute?.(result);
+      if (effects?.planUpdated) {
         onPlanUpdate?.(getCurrentPlan());
       }
 

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes, type KeyEvent, type MouseEvent, type ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard, usePaste, useTerminalDimensions } from '@opentui/solid';
-import { For, Match, Show, Switch, createMemo, createSignal, onMount, type JSX } from 'solid-js';
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js';
 import packageJson from '../../package.json';
 import { configManager } from '../config/manager';
 import { loadProviderConfig } from '../config/provider';
@@ -588,7 +588,7 @@ export function App(props: { onExit: () => void }) {
       event.preventDefault();
       return;
     }
-    if ((event.ctrl && event.name === 't') || event.raw === '\x14') {
+    if (!input() && ((event.ctrl && event.name === 't') || event.raw === '\x14')) {
       toggleTodoRail();
       event.preventDefault();
       return;
@@ -1035,8 +1035,18 @@ function formatInline(text: string): JSX.Element {
 function CodeBlock(props: { code: string; lang: string }) {
   const [highlighted, setHighlighted] = createSignal<HighlightedLine[]>();
 
-  onMount(() => {
-    void highlightCode(props.code, props.lang).then(setHighlighted);
+  createEffect(() => {
+    const code = props.code;
+    const lang = props.lang;
+    let cancelled = false;
+
+    void highlightCode(code, lang).then((result) => {
+      if (!cancelled) setHighlighted(result);
+    });
+
+    onCleanup(() => {
+      cancelled = true;
+    });
   });
 
   return (
@@ -1376,7 +1386,7 @@ function Composer(props: {
         </Show>
       </box>
       <box width="100%" paddingLeft={1} paddingTop={1}>
-        <text fg={colors.subtle}>/ menu - ctrl+t todo - arrows scroll - ctrl+c cancel/exit</text>
+        <text fg={colors.subtle}>/ menu - /todo or ctrl+t - arrows scroll - ctrl+c cancel/exit</text>
         <Show when={props.planMode}>
           <text fg={colors.accent}> - plan mode</text>
         </Show>

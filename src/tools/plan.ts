@@ -59,6 +59,9 @@ The plan should be clear, actionable, and ordered. Keep it up to date as you wor
 
     return formatPlan(currentPlan);
   },
+  onAfterExecute() {
+    return { planUpdated: true };
+  },
 };
 
 // Helper to get the current plan (can be used by other parts of the system later)
