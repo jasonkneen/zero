@@ -23,8 +23,8 @@ func TestRunUpdateRequiresCheck(t *testing.T) {
 		},
 	})
 
-	if exitCode != 1 {
-		t.Fatalf("expected exit code 1, got %d", exitCode)
+	if exitCode != exitUsage {
+		t.Fatalf("expected exit code %d, got %d", exitUsage, exitCode)
 	}
 	if checkCalled {
 		t.Fatal("update check should not run without --check")
@@ -34,6 +34,42 @@ func TestRunUpdateRequiresCheck(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.Contains(got, "Only `zero update --check` is available") {
 		t.Fatalf("expected check-only error, got %q", got)
+	}
+}
+
+func TestRunUpdateRejectsInvalidArguments(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "unknown flag",
+			args: []string{"update", "--unknown"},
+			want: `unknown update flag "--unknown"`,
+		},
+		{
+			name: "unexpected positional argument",
+			args: []string{"update", "foo"},
+			want: `unexpected update argument "foo"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			exitCode := runWithDeps(test.args, &stdout, &stderr, appDeps{})
+
+			if exitCode != exitUsage {
+				t.Fatalf("expected exit code %d, got %d", exitUsage, exitCode)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("expected empty stdout, got %q", stdout.String())
+			}
+			if got := stderr.String(); !strings.Contains(got, test.want) {
+				t.Fatalf("expected usage error %q, got %q", test.want, got)
+			}
+		})
 	}
 }
 

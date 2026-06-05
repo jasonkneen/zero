@@ -263,6 +263,7 @@ func assertHelpOutput(t *testing.T, args []string) {
 		"models",
 		"providers",
 		"doctor",
+		"update",
 		"search",
 		"plugins",
 		"hooks",

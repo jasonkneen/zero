@@ -26,7 +26,7 @@ func runUpdate(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) 
 		return exitSuccess
 	}
 	if !options.check {
-		return writeAppError(stderr, "Only `zero update --check` is available right now.", 1)
+		return writeAppError(stderr, "Only `zero update --check` is available right now.", exitUsage)
 	}
 
 	result, err := deps.checkUpdate(context.Background(), updatecheck.Options{

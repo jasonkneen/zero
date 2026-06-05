@@ -145,19 +145,25 @@ func Check(ctx context.Context, options Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer response.Body.Close()
 
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		status := response.Status
 		if strings.TrimSpace(status) == "" {
 			status = strconv.Itoa(response.StatusCode)
 		}
+		if err := response.Body.Close(); err != nil {
+			return Result{}, fmt.Errorf("close release response body: %w", err)
+		}
 		return Result{}, fmt.Errorf("GitHub release check failed (%s)", status)
 	}
 
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return Result{}, err
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return Result{}, readErr
+	}
+	if closeErr != nil {
+		return Result{}, fmt.Errorf("close release response body: %w", closeErr)
 	}
 
 	var release githubReleaseResponse
@@ -218,7 +224,7 @@ func resolveReleaseEndpoint(endpointOrRepository string, repository string) (end
 
 	parsed, err := url.ParseRequestURI(value)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return endpointResolution{}, fmt.Errorf("invalid update endpoint %q. Use a full URL or an owner/repo slug like %s.", value, repository)
+		return endpointResolution{}, fmt.Errorf("invalid update endpoint %q. Use a full URL or an owner/repo slug like %s", value, repository)
 	}
 	return endpointResolution{URL: value, Repository: repository}, nil
 }
