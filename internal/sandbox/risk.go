@@ -9,8 +9,18 @@ import (
 )
 
 var (
-	networkCommandPattern     = regexp.MustCompile(`(?i)\b(curl|wget|scp|ssh|rsync|nc|netcat|python3?\s+-m\s+http\.server|npm\s+(install|add|publish|login)|pnpm\s+(install|add|publish)|yarn\s+(add|publish)|bun\s+(add|install|publish)|pip3?\s+install|go\s+get|git\s+clone|gh\s+(release\s+download|repo\s+clone|api))\b`)
-	destructiveCommandPattern = regexp.MustCompile(`(?i)(\brm\s+(-[A-Za-z]*r[A-Za-z]*f|-rf|-fr)\s+(/|\$HOME|~|\*)|\bmkfs\b|\bdd\s+if=|\bchmod\s+-R\s+777\b|\bchown\s+-R\b)`)
+	networkCommandPattern = regexp.MustCompile(`(?i)\b(curl|wget|scp|ssh|rsync|nc|netcat|python3?\s+-m\s+http\.server|npm\s+(install|add|publish|login)|pnpm\s+(install|add|publish)|yarn\s+(add|publish)|bun\s+(add|install|publish)|pip3?\s+install|go\s+get|git\s+clone|gh\s+(release\s+download|repo\s+clone|api))\b`)
+	// destructiveCommandPattern matches the highest-risk shell forms:
+	//   - rm -rf (with combined/reordered r/f flags) targeting /, $HOME (bare,
+	//     quoted, or ${HOME} braced), ~, or *, with an optional `--` before the
+	//     target.
+	//   - chmod with combined/reordered flags and an octal-or-777 mode applied
+	//     to a directory tree (e.g. chmod -Rf 777 /, chmod -R 0777 /, chmod 777 -R /etc).
+	//   - mkfs, dd if=, chown -R.
+	destructiveCommandPattern = regexp.MustCompile(`(?i)(\brm\s+(-[A-Za-z]*r[A-Za-z]*f|-rf|-fr)\s+(--\s+)?(["']?\$\{?HOME\}?["']?|/|~|\*)|\bmkfs\b|\bdd\s+if=|\bchmod\s+(-\S+\s+)*0?777\b|\bchmod\s+0?777\s+-[A-Za-z]*\b|\bchown\s+-R\b)`)
+	// pipedInstallerPattern matches a pipe into a POSIX shell, with or without a
+	// space and across sh/bash/zsh/ksh/dash (so `curl x|sh`, `|bash`, `| zsh`).
+	pipedInstallerPattern = regexp.MustCompile(`(?i)\|\s*(ba|z|k|da)?sh\b`)
 	// destructiveExtraPatterns hold high-severity patterns that the legacy
 	// destructiveCommandPattern does not already cover. Folded in from the
 	// blueprint safe_bash.go without duplicating existing matches.
@@ -62,7 +72,10 @@ func Classify(request Request) Risk {
 		add("out_of_workspace", RiskCritical)
 	}
 
-	command := argString(request.Args, "command")
+	// The bash tool accepts the command under any of these aliases; resolve the
+	// first non-empty so destructive/network/piped-installer classification
+	// cannot be bypassed by choosing a different alias key.
+	command := firstArgString(request.Args, "command", "cmd", "script", "shell")
 	if command != "" {
 		if networkCommandPattern.MatchString(command) {
 			add("network", RiskCritical)
@@ -70,8 +83,7 @@ func Classify(request Request) Risk {
 		if matchesDestructive(command) {
 			add("destructive", RiskCritical)
 		}
-		lowerCommand := strings.ToLower(command)
-		if strings.Contains(lowerCommand, "| sh") || strings.Contains(lowerCommand, "| bash") {
+		if pipedInstallerPattern.MatchString(command) {
 			add("piped_installer", RiskCritical)
 		}
 	}
@@ -154,6 +166,16 @@ func argString(args map[string]any, key string) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(typed))
 	}
+}
+
+// firstArgString returns the first non-empty argument value among keys.
+func firstArgString(args map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := argString(args, key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func requestPaths(request Request) []string {

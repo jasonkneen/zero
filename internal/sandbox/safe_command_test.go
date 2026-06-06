@@ -92,6 +92,39 @@ func TestDetectInteractiveCommandFindsAcrossSeparators(t *testing.T) {
 	}
 }
 
+// Finding 3: firstProgram must skip additional wrappers (nice/timeout/stdbuf/
+// setsid/ionice/xargs), skip leading option tokens for sudo/env, and recurse
+// into `sh -c`/`bash -c <payload>`.
+func TestDetectInteractiveThroughWrappersAndShellC(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		wantCmd string
+	}{
+		{name: "nice", command: "nice vim file.txt", wantCmd: "vim"},
+		{name: "timeout", command: "timeout 5 vim file.txt", wantCmd: "vim"},
+		{name: "stdbuf", command: "stdbuf -oL vim file.txt", wantCmd: "vim"},
+		{name: "setsid", command: "setsid vim file.txt", wantCmd: "vim"},
+		{name: "ionice", command: "ionice -c3 vim file.txt", wantCmd: "vim"},
+		{name: "xargs", command: "xargs vim", wantCmd: "vim"},
+		{name: "sudo with option", command: "sudo -u root vim file.txt", wantCmd: "vim"},
+		{name: "env with assignment option", command: "env -i EDITOR=x vim file.txt", wantCmd: "vim"},
+		{name: "sh -c payload", command: "sh -c 'vim file.txt'", wantCmd: "vim"},
+		{name: "bash -c payload", command: `bash -c "less /var/log/syslog"`, wantCmd: "less"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := DetectInteractiveCommand(tc.command, "linux")
+			if !result.Interactive {
+				t.Fatalf("DetectInteractiveCommand(%q) = not interactive, want interactive", tc.command)
+			}
+			if result.Command != tc.wantCmd {
+				t.Fatalf("matched command = %q, want %q", result.Command, tc.wantCmd)
+			}
+		})
+	}
+}
+
 func TestDetectInteractiveBypasses(t *testing.T) {
 	blocked := []string{
 		"/usr/bin/vim file.txt",       // absolute path

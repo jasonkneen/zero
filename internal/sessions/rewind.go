@@ -28,38 +28,52 @@ type RewindMarker struct {
 // snapshot closest to the target wins). It does not modify the event log.
 func (store *Store) RestoreToSequence(sessionID, workspaceRoot string, targetSeq int) (RestoreReport, error) {
 	report := RestoreReport{TargetSequence: targetSeq}
-	lock := store.sessionLock(sessionID)
-	lock.Lock()
-	defer lock.Unlock()
+	if !ValidSessionID(sessionID) {
+		return report, fmt.Errorf("invalid zero session id %q", sessionID)
+	}
+	unlock, err := store.lockSession(sessionID)
+	if err != nil {
+		return report, err
+	}
+	defer unlock()
 
 	checkpoints, err := store.sortedCheckpointsAfter(sessionID, targetSeq)
 	if err != nil {
 		return report, err
 	}
-	// Apply newest -> oldest; a path touched by several checkpoints ends at the
-	// oldest (closest-to-target) before-state, which is applied last.
+	// sortedCheckpointsAfter returns newest-first; iterate oldest-first
+	// (closest-to-target first) so the per-path short-circuit below keeps the
+	// snapshot closest to the target and ignores all newer ones.
 	restored := map[string]bool{}
-	for _, ev := range checkpoints {
+	for i := len(checkpoints) - 1; i >= 0; i-- {
+		ev := checkpoints[i]
 		var payload CheckpointPayload
 		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
 			continue
 		}
 		for _, f := range payload.Files {
+			// Process only the CLOSEST-to-target entry per path. We iterate
+			// closest-to-target first, so the first time we see a path here is its
+			// closest-to-target snapshot; any newer (already-handled) entry for the
+			// same path must be ignored. This prevents a newer blob from
+			// overwriting an older Skipped entry and avoids double-counting
+			// FilesRestored/FilesDeleted.
+			if restored[f.Path] {
+				continue
+			}
+			restored[f.Path] = true
+
 			// Defense in depth: never write/delete outside the workspace, even if
-			// a checkpoint event was tampered with (path traversal via "../").
+			// a checkpoint event was tampered with (path traversal via "../") or
+			// an in-workspace symlink points outside the root.
 			abs, ok := resolveWithinWorkspace(workspaceRoot, f.Path)
 			if !ok {
-				if !restored[f.Path] {
-					report.Skipped = append(report.Skipped, f.Path)
-				}
-				restored[f.Path] = true
+				report.Skipped = append(report.Skipped, f.Path)
 				continue
 			}
 			switch {
 			case f.Skipped:
-				if !restored[f.Path] {
-					report.Skipped = append(report.Skipped, f.Path)
-				}
+				report.Skipped = append(report.Skipped, f.Path)
 			case f.Absent:
 				if err := os.Remove(abs); err == nil || os.IsNotExist(err) {
 					report.FilesDeleted++
@@ -78,25 +92,61 @@ func (store *Store) RestoreToSequence(sessionID, workspaceRoot string, targetSeq
 				}
 				report.FilesRestored++
 			}
-			restored[f.Path] = true
 		}
 	}
 	return report, nil
 }
 
 // resolveWithinWorkspace joins rel to root and confirms the result stays inside
-// root, rejecting traversal ("../") and absolute escapes.
+// root. It rejects lexical traversal ("../") and absolute escapes, AND resolves
+// symlinks (like tools.resolveWorkspaceTargetPath): it EvalSymlinks the deepest
+// existing ancestor, re-joins the missing segments, and verifies the result is
+// under EvalSymlinks(root). This blocks an in-workspace symlink that points
+// outside the workspace from redirecting a restore write/delete outside it.
 func resolveWithinWorkspace(root, rel string) (string, bool) {
-	abs := filepath.Join(root, rel)
-	cleanRoot := filepath.Clean(root)
-	within, err := filepath.Rel(cleanRoot, abs)
+	cleanRoot, err := filepath.EvalSymlinks(filepath.Clean(root))
 	if err != nil {
 		return "", false
 	}
-	if within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
+
+	abs := filepath.Join(cleanRoot, rel)
+
+	// Walk down from the target to the deepest ancestor that exists on disk,
+	// collecting the not-yet-created trailing segments.
+	existing := abs
+	missingSegments := []string{}
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		} else if os.IsNotExist(err) {
+			parent := filepath.Dir(existing)
+			if parent == existing {
+				return "", false
+			}
+			missingSegments = append([]string{filepath.Base(existing)}, missingSegments...)
+			existing = parent
+			continue
+		} else {
+			return "", false
+		}
+	}
+
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
 		return "", false
 	}
-	return abs, true
+	for _, segment := range missingSegments {
+		resolved = filepath.Join(resolved, segment)
+	}
+
+	within, err := filepath.Rel(cleanRoot, resolved)
+	if err != nil {
+		return "", false
+	}
+	if within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) || filepath.IsAbs(within) {
+		return "", false
+	}
+	return resolved, true
 }
 
 // TruncateEvents atomically rewrites events.jsonl keeping only events with
@@ -105,9 +155,11 @@ func (store *Store) TruncateEvents(sessionID string, keepThroughSequence int) er
 	if !ValidSessionID(sessionID) {
 		return fmt.Errorf("invalid zero session id %q", sessionID)
 	}
-	lock := store.sessionLock(sessionID)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock, err := store.lockSession(sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	events, err := store.ReadEvents(sessionID)
 	if err != nil {

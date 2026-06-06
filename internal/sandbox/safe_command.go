@@ -150,6 +150,15 @@ func DetectInteractiveCommand(command string, goos string) InteractiveCommandRes
 		if first == "" {
 			continue
 		}
+		// `sh -c <payload>` / `bash -c <payload>` runs the payload as a fresh
+		// command; recurse into it so an interactive program inside the payload
+		// is detected (e.g. `sh -c 'vim x'`).
+		if payload := shellDashCPayload(first, fields); payload != "" {
+			if inner := DetectInteractiveCommand(payload, goos); inner.Interactive {
+				return inner
+			}
+			continue
+		}
 		program, ok := interactivePrograms[first]
 		if !ok {
 			continue
@@ -171,9 +180,26 @@ func DetectInteractiveCommand(command string, goos string) InteractiveCommandRes
 	return InteractiveCommandResult{}
 }
 
+// wrapperPrograms are launcher prefixes that precede the real program. After
+// one of these we keep scanning for the actual executable.
+var wrapperPrograms = map[string]bool{
+	"sudo": true, "command": true, "env": true, "nohup": true, "time": true,
+	"exec": true, "doas": true, "nice": true, "timeout": true, "stdbuf": true,
+	"setsid": true, "ionice": true, "xargs": true,
+}
+
+// wrapperValueOptions are short options of wrapper programs that consume the
+// following token as their value (e.g. `sudo -u root`), so the value must be
+// skipped too rather than being mistaken for the real program.
+var wrapperValueOptions = map[string]bool{
+	"-u": true, "-g": true, "-h": true, "-p": true, "-C": true, "-r": true,
+	"-t": true, "-U": true, "-D": true, "-c": true, "-n": true,
+}
+
 // firstProgram returns the first executable name in a segment, skipping leading
-// environment-variable assignments (FOO=bar cmd) and `sudo`/`command`/`env`
-// prefixes that precede the real program.
+// environment-variable assignments (FOO=bar cmd), wrapper prefixes (sudo, env,
+// nice, timeout, stdbuf, setsid, ionice, xargs, ...), and the option tokens that
+// belong to those wrappers (e.g. `sudo -u root`, `env -i`, `timeout 5`).
 func firstProgram(fields []string) string {
 	for index := 0; index < len(fields); index++ {
 		field := fields[index]
@@ -181,13 +207,64 @@ func firstProgram(fields []string) string {
 			// Environment assignment prefix; keep scanning.
 			continue
 		}
+		// An option token (or a bare numeric argument such as `timeout 5`)
+		// belongs to a preceding wrapper, not the program; skip it, and also
+		// skip the value of an option that consumes the next token.
+		if strings.HasPrefix(field, "-") {
+			if wrapperValueOptions[field] && index+1 < len(fields) {
+				index++
+			}
+			continue
+		}
+		if isNumericToken(field) {
+			continue
+		}
 		token := normalizeProgramToken(field)
-		switch token {
-		case "sudo", "command", "env", "nohup", "time", "exec", "doas":
+		if wrapperPrograms[token] {
 			// Wrapper prefix; the real program follows.
 			continue
 		}
 		return token
+	}
+	return ""
+}
+
+// isNumericToken reports whether a token is purely digits (e.g. the duration
+// argument of `timeout 5`), so wrapper-argument scanning can skip it.
+func isNumericToken(field string) bool {
+	if field == "" {
+		return false
+	}
+	for _, r := range field {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// shellDashCPayload returns the command string passed to `sh -c`/`bash -c`
+// (and other POSIX shells) so the caller can recurse into it, or "" when the
+// segment is not a `<shell> -c <payload>` invocation. The payload is returned
+// with one layer of surrounding quotes stripped.
+func shellDashCPayload(program string, fields []string) string {
+	switch program {
+	case "sh", "bash", "zsh", "ksh", "dash":
+	default:
+		return ""
+	}
+	start := programIndex(program, fields)
+	if start < 0 {
+		return ""
+	}
+	args := fields[start+1:]
+	for i, arg := range args {
+		if arg == "-c" || arg == "--command" {
+			if i+1 < len(args) {
+				return strings.Join(args[i+1:], " ")
+			}
+			return ""
+		}
 	}
 	return ""
 }

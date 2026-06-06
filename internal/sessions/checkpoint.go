@@ -143,9 +143,20 @@ func (store *Store) writeBlob(sessionID string, content []byte) (string, error) 
 	return hash, nil
 }
 
-// readBlob returns the content stored under a hash.
+// readBlob returns the content stored under a hash, verifying that the content
+// still hashes to the requested sha256. A mismatch (corruption/tampering) is
+// returned as an error so the caller skips the path rather than writing
+// untrusted content as truth.
 func (store *Store) readBlob(sessionID, hash string) ([]byte, error) {
-	return os.ReadFile(store.blobPath(sessionID, hash))
+	content, err := os.ReadFile(store.blobPath(sessionID, hash))
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(content)
+	if got := hex.EncodeToString(sum[:]); got != hash {
+		return nil, fmt.Errorf("checkpoint blob %s failed integrity check (got %s)", hash, got)
+	}
+	return content, nil
 }
 
 // pruneOrphanBlobs removes blobs not referenced by any checkpoint event (e.g. after

@@ -341,9 +341,11 @@ func (store *Store) AppendEvent(sessionID string, input AppendEventInput) (Event
 	if strings.TrimSpace(string(input.Type)) == "" {
 		return Event{}, fmt.Errorf("zero session event type is required")
 	}
-	lock := store.sessionLock(sessionID)
-	lock.Lock()
-	defer lock.Unlock()
+	unlock, err := store.lockSession(sessionID)
+	if err != nil {
+		return Event{}, err
+	}
+	defer unlock()
 
 	session, err := store.readMetadata(sessionID)
 	if err != nil {
@@ -436,6 +438,30 @@ func (store *Store) sessionLock(sessionID string) *sync.Mutex {
 	return lock
 }
 
+// lockSession serializes mutations to a session both in-process (the existing
+// per-Store mutex) and across processes (an OS file lock on a per-session
+// .lock file), so a CLI rewind and a TUI sharing the same RootDir cannot
+// interleave writes. It returns an unlock function that releases both locks in
+// reverse order. The OS lock is best-effort: if it cannot be acquired (e.g. an
+// unsupported platform) the in-memory mutex still applies.
+func (store *Store) lockSession(sessionID string) (func(), error) {
+	mu := store.sessionLock(sessionID)
+	mu.Lock()
+	release, err := store.acquireFileLock(sessionID)
+	if err != nil {
+		mu.Unlock()
+		return nil, err
+	}
+	return func() {
+		release()
+		mu.Unlock()
+	}, nil
+}
+
+func (store *Store) lockPath(sessionID string) string {
+	return filepath.Join(store.sessionPath(sessionID), "session.lock")
+}
+
 func (store *Store) sessionPath(sessionID string) string {
 	return filepath.Join(store.RootDir, sessionID)
 }
@@ -466,11 +492,12 @@ func (store *Store) writeMetadata(session Metadata) error {
 		return fmt.Errorf("encode zero session metadata: %w", err)
 	}
 	path := store.metadataPath(session.SessionID)
-	tmp := path + ".tmp"
+	tmp := fmt.Sprintf("%s.tmp-%d", path, store.idCounter.Add(1))
 	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write zero session metadata: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("replace zero session metadata: %w", err)
 	}
 	return nil
