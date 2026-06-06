@@ -72,6 +72,21 @@ func (m model) modeSegment() string {
 	return style.Render("⏵⏵ "+label) + zeroTheme.muted.Render(" · shift+tab to cycle")
 }
 
+// nextPermissionMode advances the permission mode in the order the status bar
+// advertises: Auto → Ask → Unsafe → Auto. Any unrecognized value resets to Auto.
+func nextPermissionMode(mode agent.PermissionMode) agent.PermissionMode {
+	switch mode {
+	case agent.PermissionModeAuto:
+		return agent.PermissionModeAsk
+	case agent.PermissionModeAsk:
+		return agent.PermissionModeUnsafe
+	case agent.PermissionModeUnsafe:
+		return agent.PermissionModeAuto
+	default:
+		return agent.PermissionModeAuto
+	}
+}
+
 func (m model) modeLabel() (string, lipgloss.Style) {
 	switch m.permissionMode {
 	case agent.PermissionModeAuto:

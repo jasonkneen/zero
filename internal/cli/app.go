@@ -303,7 +303,12 @@ func runInteractiveTUIWithSkin(stderr io.Writer, deps appDeps, skin string) int 
 		Store:         sandboxStore,
 		Backend:       deps.selectSandboxBackend(sandbox.BackendOptions{}),
 	})
-	permissionMode := agent.PermissionModeAuto
+	// Ask (not Auto) is the interactive default: in Auto, ToolAdvertised exposes
+	// only PermissionAllow tools, so prompt-gated tools (write_file/edit_file/bash/
+	// apply_patch) would never be offered to the model — the TUI could neither edit
+	// files nor run shell. Ask advertises them and routes each through the existing
+	// OnPermissionRequest flow; shift+tab lets the user switch modes live.
+	permissionMode := agent.PermissionModeAsk
 	return deps.runTUI(context.Background(), tui.Options{
 		Cwd:             workspaceRoot,
 		ProviderName:    resolved.Provider.Name,
@@ -387,6 +392,7 @@ Commands:
   verify     Detect and run local verification checks
   changes    Inspect and commit local git changes
   serve      Run Zero protocol servers
+  zenline    Launch the interactive TUI with the Zenline reskin
   help       Show this help
   version    Print version
 

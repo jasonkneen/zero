@@ -74,6 +74,35 @@ func TestRenderChatLiveData(t *testing.T) {
 	}
 }
 
+func TestRenderChatAskUserShowsQuestionNotSpinner(t *testing.T) {
+	d := ChatData{
+		Variant: 0, Dark: true, Width: 100, Height: 30,
+		Header: Header{Cwd: "~/src/zero", Model: "claude-sonnet-4.5", Provider: "anthropic"},
+		Rows:   []Row{{Kind: "user", Text: "scaffold a project"}},
+		// A pending ask_user prompt: even though the run is technically working,
+		// the questionnaire must show, not the spinner.
+		Working:  true,
+		Thinking: true,
+		AskUser: &AskUser{
+			Header:   "A couple of details",
+			Question: "Which framework?",
+			Options:  []string{"React", "Vue"},
+			Index:    0,
+			Total:    2,
+			Input:    "Re",
+		},
+	}
+	out := stripANSI(RenderChat(d))
+	for _, want := range []string{"Which framework?", "React", "Vue", "question 1 of 2", "A couple of details"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ask_user chat render missing %q", want)
+		}
+	}
+	if strings.Contains(out, "thinking") {
+		t.Error("ask_user prompt must suppress the thinking spinner")
+	}
+}
+
 func TestPermLayoutMatchesRender(t *testing.T) {
 	// The buttons row in the rendered modal must sit exactly where PermLayout
 	// says, so mouse clicks land on the right choice.

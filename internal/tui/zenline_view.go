@@ -85,7 +85,11 @@ func (m model) zenlineView() string {
 			running = true
 		}
 	}
-	thinking := m.pending && m.streamingText == "" && !running && m.pendingPermission == nil
+	askUser := m.zenlineAskUser()
+	// A pending permission prompt or ask_user questionnaire is the focus: suppress
+	// the working/thinking spinner so the gate/question shows instead.
+	blocked := m.pendingPermission != nil || askUser != nil
+	thinking := m.pending && m.streamingText == "" && !running && !blocked
 
 	return zenline.RenderChat(zenline.ChatData{
 		Variant:     m.themeVariant,
@@ -94,17 +98,48 @@ func (m model) zenlineView() string {
 		Height:      height,
 		Header:      header,
 		Rows:        rows,
-		Working:     m.pending && m.pendingPermission == nil,
+		Working:     m.pending && !blocked,
 		Thinking:    thinking,
 		Stream:      m.streamingText,
 		TokS:        m.streamTokS(),
 		Spin:        m.frame,
 		Perm:        m.zenlinePerm(),
+		AskUser:     askUser,
 		Input:       m.input.View(),
 		Suggestions: m.zenlineSuggestions(),
 		SelectedIdx: m.suggestionIdx,
 		Picker:      m.zenlinePicker(),
 	})
+}
+
+// zenlineAskUser maps a pending ask_user questionnaire into zenline render data,
+// or nil when none is active. The focused question is the one at the prompt's
+// current index.
+func (m model) zenlineAskUser() *zenline.AskUser {
+	if m.pendingAskUser == nil {
+		return nil
+	}
+	prompt := m.pendingAskUser
+	total := len(prompt.request.Questions)
+	index := prompt.index
+	if index >= total {
+		index = total - 1
+	}
+	if index < 0 {
+		index = 0
+	}
+	out := &zenline.AskUser{
+		Header: prompt.request.Header,
+		Index:  index,
+		Total:  total,
+		Input:  m.input.Value(),
+	}
+	if total > 0 {
+		question := prompt.request.Questions[index]
+		out.Question = question.Question
+		out.Options = question.Options
+	}
+	return out
 }
 
 // zenlineSuggestions maps the live autocomplete matches into zenline render

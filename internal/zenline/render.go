@@ -34,6 +34,19 @@ type Perm struct {
 	Tool, Risk, Reason, Summary string
 }
 
+// AskUser is an in-flight ask_user questionnaire awaiting an answer: the focused
+// question (one of Total, 0-based Index), its options, an optional header, and the
+// answer typed so far. When set, RenderChat shows the questionnaire instead of the
+// working/thinking spinner.
+type AskUser struct {
+	Header   string
+	Question string
+	Options  []string
+	Index    int
+	Total    int
+	Input    string
+}
+
 // Suggestion is one slash-command autocomplete row threaded in from the TUI.
 type Suggestion struct {
 	Name string
@@ -76,7 +89,11 @@ type ChatData struct {
 	TokS          int    // streaming tokens/sec
 	Spin          int
 	Perm          *Perm
-	Input         string
+	// AskUser, when non-nil, is a pending ask_user questionnaire. It renders the
+	// focused question (over the spinner) so the zenline skin mirrors the default
+	// skin instead of showing a misleading "working…".
+	AskUser *AskUser
+	Input   string
 	// Suggestions / SelectedIdx drive the slash-command autocomplete overlay; an
 	// empty slice means no overlay. Picker, when non-nil, is an open selector.
 	Suggestions []Suggestion
@@ -214,7 +231,7 @@ func RenderChat(d ChatData) string {
 
 	run := "normal"
 	switch {
-	case d.Perm != nil:
+	case d.Perm != nil, d.AskUser != nil:
 		run = "blocked"
 	case d.Working:
 		run = "work"
@@ -561,6 +578,32 @@ func (s styles) permModalLines(p *Perm, bw int) []string {
 	return lines
 }
 
+// askUserLines renders the focused ask_user question as a "✦ zero" block: an
+// optional header, the "question N of M" counter, the question, its options, the
+// answer typed so far, and a short hint. Mirrors the default skin's focused
+// questionnaire so the zenline surface no longer shows a misleading spinner.
+func (s styles) askUserLines(a *AskUser, tw int) []string {
+	heading := s.acc2.Bold(true).Render("✦ ask zero")
+	if header := strings.TrimSpace(a.Header); header != "" {
+		heading += "  " + s.fg.Render(clip(header, tw-12))
+	}
+	lines := []string{heading}
+	if a.Total > 0 {
+		lines = append(lines, "        "+s.dim.Render(fmt.Sprintf("question %d of %d", a.Index+1, a.Total)))
+	}
+	lines = append(lines, "        "+s.fg.Render(clip(a.Question, tw-9)))
+	if len(a.Options) > 0 {
+		lines = append(lines, "        "+s.dim.Render(clip("options: "+strings.Join(a.Options, ", "), tw-9)))
+	}
+	answer := strings.TrimSpace(a.Input)
+	if answer == "" {
+		answer = "—"
+	}
+	lines = append(lines, "        "+s.mute.Render("› ")+s.fg.Render(clip(answer, tw-11)))
+	lines = append(lines, "        "+s.dim.Render("type an answer, Enter to submit · Esc to skip"))
+	return lines
+}
+
 func (s styles) transcript(d ChatData, w, h int) string {
 	tw := w - 4
 	var lines []string
@@ -620,6 +663,11 @@ func (s styles) transcript(d ChatData, w, h int) string {
 	}
 
 	switch {
+	case d.AskUser != nil:
+		// A pending questionnaire takes the place of the thinking/streaming line:
+		// show the focused question, not a misleading spinner.
+		blank()
+		add(s.askUserLines(d.AskUser, tw)...)
 	case d.Stream != "":
 		blank()
 		add(s.acc2.Bold(true).Render("✦ zero"))

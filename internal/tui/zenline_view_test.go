@@ -55,6 +55,35 @@ func TestZenlineHomeThenChat(t *testing.T) {
 	}
 }
 
+func TestZenlineAskUserRender(t *testing.T) {
+	m := newZenlineModel()
+	m.showSplash = false
+	m.pending = true
+	m.activeRunID = 7
+
+	updated, _ := m.Update(askUserRequestMsg{
+		runID:   7,
+		request: testAskUserRequest(),
+		answer:  func([]string) {},
+	})
+	next := updated.(model)
+	if next.pendingAskUser == nil {
+		t.Fatal("expected ask_user prompt to be pending")
+	}
+
+	out := next.View()
+	for _, want := range []string{"Which framework?", "React", "Vue", "question 1 of 2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("zenline ask_user view missing %q", want)
+		}
+	}
+	// The misleading "working…"/"thinking" spinner must be suppressed while a
+	// questionnaire is pending.
+	if strings.Contains(out, "thinking") {
+		t.Error("zenline ask_user view should suppress the thinking spinner")
+	}
+}
+
 func TestZenlinePermissionRender(t *testing.T) {
 	m := newZenlineModel()
 	m.showSplash = false

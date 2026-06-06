@@ -56,11 +56,20 @@ type model struct {
 	runCancel          context.CancelFunc
 	runID              int
 	activeRunID        int
-	pendingPermission  *pendingPermissionPrompt
-	pendingAskUser     *pendingAskUserPrompt
-	width              int
-	height             int
-	now                func() time.Time
+	// flushRunID is the id of a run that was cancelled while still in flight. Its
+	// agent goroutine keeps running to completion and returns its accumulated
+	// sessionEvents (including EventSessionCheckpoint payloads captured before each
+	// mutating tool) in a final agentResponseMsg. activeRunID is already zeroed by
+	// then, so without this the message would be dropped and the checkpoint blobs
+	// already written to disk would be orphaned (breaking /rewind). The
+	// agentResponseMsg handler persists this run's session events (only) so the
+	// checkpoints stay referenced.
+	flushRunID        int
+	pendingPermission *pendingPermissionPrompt
+	pendingAskUser    *pendingAskUserPrompt
+	width             int
+	height            int
+	now               func() time.Time
 
 	skin             string // "" default shell, "zenline" reskin
 	themeVariant     int    // zenline color theme (0-4)
@@ -267,6 +276,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.completeSuggestion(), nil
 			}
 			return m.handleSubmit()
+		case tea.KeyShiftTab:
+			// shift+tab cycles the permission mode (Auto→Ask→Unsafe→Auto), but
+			// only when nothing modal is up: a permission prompt, ask_user
+			// questionnaire, or open picker all take precedence and let the key
+			// fall through to their own handlers below.
+			if m.pendingPermission == nil && m.pendingAskUser == nil && m.picker == nil {
+				m.permissionMode = nextPermissionMode(m.permissionMode)
+				return m, nil
+			}
 		case tea.KeyTab:
 			if m.picker == nil && m.suggestionsActive() {
 				m.moveSuggestion(1)
@@ -383,6 +401,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case agentResponseMsg:
 		if msg.runID != m.activeRunID {
+			// A run cancelled while in flight still finishes in its goroutine and
+			// returns its accumulated session events here. Persist ONLY those events
+			// (notably the EventSessionCheckpoint payloads captured before each
+			// mutating tool) so the checkpoint blobs stay referenced and /rewind
+			// works; the cancel path already wrote the "Run cancelled." marker, so
+			// skip transcript rows, the trailing cancellation error, and any pending
+			// state changes.
+			if msg.runID == m.flushRunID && m.flushRunID != 0 {
+				m.flushRunID = 0
+				m, _ = m.appendSessionEvents(flushableSessionEvents(msg.sessionEvents))
+			}
 			return m, nil
 		}
 		m.pending = false
@@ -816,6 +845,13 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 func (m *model) cancelRun() {
 	if m.runCancel != nil {
 		m.runCancel()
+	}
+	// Remember the in-flight run so its final agentResponseMsg is still drained
+	// for session-event persistence after activeRunID is cleared — otherwise the
+	// checkpoint blobs it captured before each mutating tool are orphaned on disk
+	// and /rewind can't reference them.
+	if m.pending && m.activeRunID != 0 {
+		m.flushRunID = m.activeRunID
 	}
 	if m.pending && m.activeSession.SessionID != "" {
 		if next, err := (*m).appendSessionEvent(sessions.EventError, map[string]any{

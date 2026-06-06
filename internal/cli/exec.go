@@ -81,6 +81,16 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 		return exitSuccess
 	}
 
+	// A mode seeds model/effort/max-turns/tool filters as a preset. Expand it up
+	// front — before tool-filter validation and the --list-tools branch — so a
+	// mode-injected tool filter is validated and reflected in --list-tools, and a
+	// mode-supplied model flows through the same resolution (and deprecation
+	// notice) path as an explicit --model. Explicit flags still win: applyExecMode
+	// only fills fields the caller left unset.
+	if err := applyExecMode(&options); err != nil {
+		return writeExecFormatUsageError(stdout, stderr, options.outputFormat, err.Error())
+	}
+
 	workspaceRoot, err := resolveWorkspaceRoot(options.cwd, deps)
 	if err != nil {
 		return writeExecFormatUsageError(stdout, stderr, options.outputFormat, err.Error())
@@ -130,13 +140,6 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 
 	prompt, err := resolveExecPrompt(options, workspaceRoot, deps.stdin)
 	if err != nil {
-		return writeExecFormatUsageError(stdout, stderr, options.outputFormat, err.Error())
-	}
-
-	// A mode seeds model/effort/max-turns/tool filters as a preset. It is applied
-	// before the explicit flags below so that an explicit --model / --reasoning-
-	// effort / --max-turns / tool filter still wins over the preset.
-	if err := applyExecMode(&options); err != nil {
 		return writeExecFormatUsageError(stdout, stderr, options.outputFormat, err.Error())
 	}
 
@@ -439,10 +442,11 @@ func writeExecProviderError(stdout io.Writer, stderr io.Writer, format execOutpu
 
 // applyExecMode expands a --mode preset onto the exec options. The preset only
 // fills fields the caller left unset, so an explicit --model / --reasoning-effort
-// / --max-turns / tool filter always wins over the mode. The mode's model is
-// resolved through the registry so canonical ids/deprecation fallbacks are seeded
-// (the same routing applied to an explicit --model later). An unknown mode is a
-// usage error listing the valid presets.
+// / --max-turns / tool filter always wins over the mode. The mode's model is left
+// as the preset's raw id/alias so the shared --model resolution path resolves it
+// through the registry (canonical ids/deprecation fallbacks) AND surfaces any
+// deprecation notice on stderr, exactly like an explicit --model. An unknown mode
+// is a usage error listing the valid presets.
 func applyExecMode(options *execOptions) error {
 	name := strings.TrimSpace(options.mode)
 	if name == "" {
@@ -453,8 +457,7 @@ func applyExecMode(options *execOptions) error {
 		return execUsageError{fmt.Sprintf("unknown mode %q. Valid modes: %s.", options.mode, strings.Join(modelregistry.ModeNames(), ", "))}
 	}
 	if options.model == "" && mode.Model != "" {
-		resolved, _ := resolveSelectedModel(mode.Model)
-		options.model = resolved
+		options.model = mode.Model
 	}
 	if options.reasoningEffort == "" && mode.Effort != "" {
 		options.reasoningEffort = string(mode.Effort)
