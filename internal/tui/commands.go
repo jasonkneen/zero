@@ -17,6 +17,7 @@ const (
 	commandPermissions
 	commandProvider
 	commandModel
+	commandMode
 	commandContext
 	commandConfig
 	commandDebug
@@ -75,6 +76,13 @@ var commandDefinitions = []commandDefinition{
 		description:  "Show or switch the active model.",
 		kind:         commandModel,
 		startupOrder: 4,
+	},
+	{
+		name:        "/mode",
+		usage:       "/mode [name]",
+		group:       commandGroupModel,
+		description: "List agent modes or switch model, effort, and turns at once.",
+		kind:        commandMode,
 	},
 	{
 		name:         "/plan",

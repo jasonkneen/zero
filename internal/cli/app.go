@@ -402,6 +402,7 @@ Runs a one-shot prompt through the Go agent runtime.
 
 Flags:
   -f, --file <path>                  Read prompt text from a file
+      --mode <name>                  Apply a preset (smart, deep, fast, large, precise); explicit flags override it
   -m, --model <model>                Select the model for provider setup
       --max-turns <number>           Override the maximum agent loop turns
       --auto <low|medium|high>       Set exec autonomy; high enables unsafe tools

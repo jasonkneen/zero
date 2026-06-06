@@ -542,6 +542,12 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 		m, text = m.handleModelCommand(command.text)
 		m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: text})
 		return m, nil
+	case commandMode:
+		m.showSplash = false
+		text := ""
+		m, text = m.handleModeCommand(command.text)
+		m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: text})
+		return m, nil
 	case commandContext:
 		m.showSplash = false
 		m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: m.contextText()})

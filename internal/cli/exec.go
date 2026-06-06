@@ -40,6 +40,7 @@ const (
 type execOptions struct {
 	promptParts           []string
 	file                  string
+	mode                  string
 	model                 string
 	modelProfile          string
 	reasoningEffort       string
@@ -129,6 +130,13 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 
 	prompt, err := resolveExecPrompt(options, workspaceRoot, deps.stdin)
 	if err != nil {
+		return writeExecFormatUsageError(stdout, stderr, options.outputFormat, err.Error())
+	}
+
+	// A mode seeds model/effort/max-turns/tool filters as a preset. It is applied
+	// before the explicit flags below so that an explicit --model / --reasoning-
+	// effort / --max-turns / tool filter still wins over the preset.
+	if err := applyExecMode(&options); err != nil {
 		return writeExecFormatUsageError(stdout, stderr, options.outputFormat, err.Error())
 	}
 
@@ -426,6 +434,40 @@ func writeExecProviderError(stdout io.Writer, stderr io.Writer, format execOutpu
 		return exitCrash
 	}
 	return exitProvider
+}
+
+// applyExecMode expands a --mode preset onto the exec options. The preset only
+// fills fields the caller left unset, so an explicit --model / --reasoning-effort
+// / --max-turns / tool filter always wins over the mode. The mode's model is
+// resolved through the registry so canonical ids/deprecation fallbacks are seeded
+// (the same routing applied to an explicit --model later). An unknown mode is a
+// usage error listing the valid presets.
+func applyExecMode(options *execOptions) error {
+	name := strings.TrimSpace(options.mode)
+	if name == "" {
+		return nil
+	}
+	mode, ok := modelregistry.LookupMode(name)
+	if !ok {
+		return execUsageError{fmt.Sprintf("unknown mode %q. Valid modes: %s.", options.mode, strings.Join(modelregistry.ModeNames(), ", "))}
+	}
+	if options.model == "" && mode.Model != "" {
+		resolved, _ := resolveSelectedModel(mode.Model)
+		options.model = resolved
+	}
+	if options.reasoningEffort == "" && mode.Effort != "" {
+		options.reasoningEffort = string(mode.Effort)
+	}
+	if options.maxTurns == 0 && mode.MaxTurns > 0 {
+		options.maxTurns = mode.MaxTurns
+	}
+	if len(options.enabledTools) == 0 && len(mode.EnabledTools) > 0 {
+		options.enabledTools = append([]string{}, mode.EnabledTools...)
+	}
+	if len(options.disabledTools) == 0 && len(mode.DisabledTools) > 0 {
+		options.disabledTools = append([]string{}, mode.DisabledTools...)
+	}
+	return nil
 }
 
 // resolveSelectedModel routes a user-supplied --model value through the model

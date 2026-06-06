@@ -34,6 +34,7 @@ func TestRunExecHelpDocumentsM1Flags(t *testing.T) {
 			}
 			for _, want := range []string{
 				"-f, --file",
+				"--mode <name>",
 				"-m, --model",
 				"--max-turns",
 				"--profile <profile>",
@@ -120,6 +121,104 @@ func TestRunExecMaxTurnsReachesConfigOverrides(t *testing.T) {
 	}
 	if gotMaxTurns != 7 {
 		t.Fatalf("overrides.MaxTurns = %d, want 7", gotMaxTurns)
+	}
+}
+
+func TestRunExecModeSeedsModelAndTurnOverrides(t *testing.T) {
+	cwd := t.TempDir()
+	var gotModel string
+	var gotMaxTurns int
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithDeps([]string{"exec", "--mode", "deep", "hello"}, &stdout, &stderr, appDeps{
+		getwd: func() (string, error) {
+			return cwd, nil
+		},
+		resolveConfig: func(_ string, overrides config.Overrides) (config.ResolvedConfig, error) {
+			gotModel = overrides.Provider.Model
+			gotMaxTurns = overrides.MaxTurns
+			return config.ResolvedConfig{}, errors.New("stop before provider")
+		},
+	})
+
+	if exitCode != exitProvider {
+		t.Fatalf("expected provider exit %d, got %d", exitProvider, exitCode)
+	}
+	if gotModel != "claude-opus-4.1" {
+		t.Fatalf("overrides.Provider.Model = %q, want claude-opus-4.1", gotModel)
+	}
+	if gotMaxTurns != 50 {
+		t.Fatalf("overrides.MaxTurns = %d, want 50", gotMaxTurns)
+	}
+}
+
+func TestRunExecExplicitModelOverridesMode(t *testing.T) {
+	cwd := t.TempDir()
+	var gotModel string
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithDeps([]string{"exec", "--mode", "deep", "--model", "gpt-4.1", "hello"}, &stdout, &stderr, appDeps{
+		getwd: func() (string, error) {
+			return cwd, nil
+		},
+		resolveConfig: func(_ string, overrides config.Overrides) (config.ResolvedConfig, error) {
+			gotModel = overrides.Provider.Model
+			return config.ResolvedConfig{}, errors.New("stop before provider")
+		},
+	})
+
+	if exitCode != exitProvider {
+		t.Fatalf("expected provider exit %d, got %d", exitProvider, exitCode)
+	}
+	if gotModel != "gpt-4.1" {
+		t.Fatalf("explicit --model should override mode: got %q, want gpt-4.1", gotModel)
+	}
+}
+
+func TestRunExecModeRoutesModelThroughRegistry(t *testing.T) {
+	cwd := t.TempDir()
+	var gotModel string
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	// "smart" maps to claude-sonnet-4.5; the mode's model must be routed through
+	// the registry (Resolve) so the canonical id reaches the overrides.
+	exitCode := runWithDeps([]string{"exec", "--mode", "smart", "hi"}, &stdout, &stderr, appDeps{
+		getwd: func() (string, error) {
+			return cwd, nil
+		},
+		resolveConfig: func(_ string, overrides config.Overrides) (config.ResolvedConfig, error) {
+			gotModel = overrides.Provider.Model
+			return config.ResolvedConfig{}, errors.New("stop before provider")
+		},
+	})
+
+	if exitCode != exitProvider {
+		t.Fatalf("expected provider exit %d, got %d", exitProvider, exitCode)
+	}
+	if gotModel != "claude-sonnet-4.5" {
+		t.Fatalf("expected mode smart to select claude-sonnet-4.5, got %q", gotModel)
+	}
+}
+
+func TestRunExecUnknownModeErrors(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := Run([]string{"exec", "--mode", "turbo", "hello"}, &stdout, &stderr)
+
+	if exitCode != exitUsage {
+		t.Fatalf("expected usage exit %d, got %d", exitUsage, exitCode)
+	}
+	if !strings.Contains(stderr.String(), "unknown mode") {
+		t.Fatalf("expected unknown mode error, got %q", stderr.String())
+	}
+	for _, want := range []string{"smart", "deep", "fast", "large", "precise"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("expected error to list valid mode %q, got %q", want, stderr.String())
+		}
 	}
 }
 

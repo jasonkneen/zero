@@ -168,6 +168,118 @@ func (m model) handleModelCommand(args string) (model, string) {
 	return m, strings.Join(lines, "\n")
 }
 
+// handleModeCommand applies a preset that bundles model, reasoning effort, and
+// turn budget. "/mode" with no argument lists the presets; "/mode <name>"
+// switches the active model (rebuilding the provider, like /model), the reasoning
+// effort (like /effort), and the agent-loop turn budget for this TUI session. It
+// mirrors the state mutations in handleModelCommand/handleEffortCommand so a mode
+// switch is equivalent to running those commands in sequence.
+func (m model) handleModeCommand(args string) (model, string) {
+	args = strings.TrimSpace(args)
+	switch strings.ToLower(args) {
+	case "":
+		return m, m.modeListText()
+	case "list", "ls":
+		return m, m.modeListText()
+	}
+
+	mode, ok := modelregistry.LookupMode(args)
+	if !ok {
+		return m, "Mode\nunknown mode " + strconv.Quote(args) + "\navailable: " + strings.Join(modelregistry.ModeNames(), ", ")
+	}
+	if m.pending {
+		return m, "Mode\nCannot switch modes while a run is active."
+	}
+
+	registry, err := modelregistry.DefaultRegistry()
+	if err != nil {
+		return m, "Mode\nFailed to load model catalog: " + err.Error()
+	}
+	entry, notice, ok := registry.ResolveWithFallback(mode.Model)
+	if !ok {
+		return m, "Mode\nmode " + strconv.Quote(mode.Name) + " references unknown model " + strconv.Quote(mode.Model)
+	}
+	if m.providerProfile == (config.ProviderProfile{}) {
+		return m, "Mode\nNo provider profile is available for TUI mode switching."
+	}
+	if m.newProvider == nil {
+		return m, "Mode\nProvider rebuild is not available for this TUI session."
+	}
+
+	nextProfile := m.providerProfile
+	nextProfile.Model = entry.ID
+	metadata, err := providers.ResolveRuntimeMetadata(nextProfile, providers.Options{})
+	if err != nil {
+		return m, "Mode\n" + err.Error()
+	}
+	nextProvider, err := m.newProvider(nextProfile)
+	if err != nil {
+		return m, "Mode\n" + err.Error()
+	}
+
+	m.providerProfile = nextProfile
+	m.provider = nextProvider
+	m.providerName = displayValue(nextProfile.Name, string(metadata.ProviderKind))
+	m.modelName = entry.ID
+
+	// Apply the mode's reasoning effort when the resolved model supports it;
+	// otherwise fall back to auto (the model's effective default) so we never
+	// store an unsupported preference.
+	effortLine := "effort: auto"
+	if mode.Effort != "" && reasoningEffortAllowed(entry.ReasoningEfforts, mode.Effort) {
+		m.reasoningEffort = mode.Effort
+		effortLine = "effort: " + string(mode.Effort)
+	} else {
+		m.reasoningEffort = ""
+		if mode.Effort != "" {
+			effortLine = "effort: auto (mode effort unsupported by model)"
+		}
+	}
+
+	turnsLine := fmt.Sprintf("max turns: %d (unchanged)", m.agentOptions.MaxTurns)
+	if mode.MaxTurns > 0 {
+		m.agentOptions.MaxTurns = mode.MaxTurns
+		turnsLine = fmt.Sprintf("max turns: %d", mode.MaxTurns)
+	}
+
+	lines := []string{"Mode"}
+	if notice != "" {
+		lines = append(lines, notice)
+	}
+	lines = append(lines,
+		"Switched to mode "+mode.Name+" for this TUI session.",
+		mode.Description,
+		"model: "+entry.ID,
+		"provider: "+string(metadata.ProviderKind),
+		effortLine,
+		turnsLine,
+	)
+	return m, strings.Join(lines, "\n")
+}
+
+func (m model) modeListText() string {
+	lines := make([]string, 0, len(modelregistry.Modes()))
+	for _, mode := range modelregistry.Modes() {
+		detail := fmt.Sprintf("model=%s", mode.Model)
+		if mode.Effort != "" {
+			detail += " effort=" + string(mode.Effort)
+		}
+		if mode.MaxTurns > 0 {
+			detail += fmt.Sprintf(" turns=%d", mode.MaxTurns)
+		}
+		lines = append(lines, commandBullet(fmt.Sprintf("%s - %s (%s)", mode.Name, mode.Description, detail)))
+	}
+	return renderCommandOutput(commandOutput{
+		Title:  "Mode",
+		Status: commandStatusOK,
+		Sections: []commandSection{{
+			Title: "Available",
+			Lines: lines,
+		}},
+		Hints: []string{"use /mode <name> to switch model, effort, and turns"},
+	})
+}
+
 func apiKeyState(set bool) string {
 	if set {
 		return "set"
