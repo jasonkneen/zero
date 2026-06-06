@@ -323,6 +323,11 @@ func ParseManifest(raw any, options ParseManifestOptions) (LoadedPlugin, error) 
 		return LoadedPlugin{}, err
 	}
 
+	// NOTE: the tools/prompts/skills/hooks extensions parsed below are validated
+	// for DISCOVERY only (the `zero plugins` listing + backend snapshots). They
+	// are not yet registered into the tool registry / hook dispatcher / skills
+	// loader at runtime — that wiring is tracked as a separate feature, so these
+	// parsed-but-unconsumed fields are intentional, not dead code.
 	tools, err := parseTools(obj["tools"], options.AllowManifestToolAutoApproval)
 	if err != nil {
 		return LoadedPlugin{}, err

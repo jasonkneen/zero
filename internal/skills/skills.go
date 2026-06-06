@@ -53,6 +53,10 @@ func DefaultDir(env map[string]string) string {
 // Load scans dir for */SKILL.md files and returns the parsed skills sorted by
 // name. A missing directory yields an empty slice with no error; individual
 // malformed skill files are skipped rather than failing the whole load.
+//
+// NOTE: Load currently scans a single root (ZERO_SKILLS_DIR / the data dir).
+// Plugin-declared skill paths (the plugins manifest "skills" array) are NOT yet
+// merged into this lookup; multi-root loading is tracked as a separate feature.
 func Load(dir string) ([]Skill, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
