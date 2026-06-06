@@ -329,3 +329,70 @@ func TestRunStalePlanReminderIsOneShotPerInterval(t *testing.T) {
 		t.Fatalf("expected the stale reminder to be one-shot per interval (exactly 1), got %d", count)
 	}
 }
+
+type alwaysFailingTool struct{}
+
+func (alwaysFailingTool) Name() string             { return "flaky" }
+func (alwaysFailingTool) Description() string       { return "always fails for testing" }
+func (alwaysFailingTool) Parameters() tools.Schema  { return tools.Schema{Type: "object", AdditionalProperties: false} }
+func (alwaysFailingTool) Safety() tools.Safety {
+	return tools.Safety{SideEffect: tools.SideEffectRead, Permission: tools.PermissionAllow}
+}
+func (alwaysFailingTool) Run(context.Context, map[string]any) tools.Result {
+	return tools.Result{Status: tools.StatusError, Output: "Error: Invalid arguments for flaky: thing is required"}
+}
+
+func repeatedFlakyTurns(n int) [][]zeroruntime.StreamEvent {
+	turn := []zeroruntime.StreamEvent{
+		{Type: zeroruntime.StreamEventToolCallStart, ToolCallID: "c", ToolName: "flaky"},
+		{Type: zeroruntime.StreamEventToolCallEnd, ToolCallID: "c"},
+		{Type: zeroruntime.StreamEventDone},
+	}
+	turns := make([][]zeroruntime.StreamEvent, 0, n)
+	for i := 0; i < n; i++ {
+		turns = append(turns, turn)
+	}
+	return turns
+}
+
+func TestRunStopsAfterRepeatedToolFailures(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.Register(alwaysFailingTool{})
+	provider := &mockProvider{turns: repeatedFlakyTurns(10)}
+
+	result, err := Run(context.Background(), "go", provider, Options{Registry: registry, MaxTurns: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.FinalAnswer, "flaky") || !strings.Contains(result.FinalAnswer, "failed") {
+		t.Fatalf("expected repeated-failure stop answer, got %q", result.FinalAnswer)
+	}
+	// Must halt at the failure cap, NOT loop to maxTurns.
+	if len(provider.requests) != toolFailureStopAt {
+		t.Fatalf("expected stop at %d failures, made %d requests", toolFailureStopAt, len(provider.requests))
+	}
+}
+
+func TestRunInjectsToolFailureHintWithSchema(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.Register(alwaysFailingTool{})
+	provider := &mockProvider{turns: repeatedFlakyTurns(10)}
+
+	if _, err := Run(context.Background(), "go", provider, Options{Registry: registry, MaxTurns: 12}); err != nil {
+		t.Fatal(err)
+	}
+	// After the 2nd failure a one-shot hint is injected, so the 3rd turn's request
+	// carries it (with the tool schema).
+	found := false
+	for _, m := range provider.requests[2].Messages {
+		if m.Role == zeroruntime.MessageRoleUser && strings.Contains(m.Content, toolFailureHintMarker) {
+			found = true
+			if !strings.Contains(m.Content, "object") { // schema rendered
+				t.Errorf("hint should include the tool schema, got %q", m.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a tool-failure hint on the 3rd turn, messages: %+v", provider.requests[2].Messages)
+	}
+}

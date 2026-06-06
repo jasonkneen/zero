@@ -179,6 +179,7 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 		// stay current.
 		guards.observeTurn(collected)
 
+		failureHint := ""
 		for _, call := range collected.ToolCalls {
 			if options.OnToolCall != nil {
 				options.OnToolCall(call)
@@ -192,12 +193,29 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 				Content:    toolResult.Output,
 				ToolCallID: toolResult.ToolCallID,
 			})
+
+			// Repeated-failure guard: if a tool keeps failing the same way, hint
+			// once (with its schema) then halt — so no model loops on a bad call.
+			outcome := guards.observeToolResult(call.Name, toolResult.Status == tools.StatusError, toolResult.Output)
+			if outcome.Stop {
+				result.FinalAnswer = toolFailureStopAnswer(call.Name, outcome.Count)
+				result.Messages = copyMessages(messages)
+				return result, nil
+			}
+			if outcome.InjectHint && failureHint == "" {
+				failureHint = toolFailureHint(call.Name, toolSchemaJSON(registry, call.Name), toolResult.Output)
+			}
 		}
 
-		// Planning-enforcement reminders: light, one-shot, user-role nudges
-		// (like the dropped-call retry above). Only fire when the loop can
-		// observe by tool name that the plan is missing or stale.
-		if reminder := guards.planReminder(result.Turns); reminder != "" {
+		// A repeated-failure hint (schema + exact error) takes priority over the
+		// planning reminders — fixing the failing call matters more than plan
+		// hygiene. Both are light, one-shot, user-role nudges.
+		if failureHint != "" {
+			messages = append(messages, zeroruntime.Message{
+				Role:    zeroruntime.MessageRoleUser,
+				Content: failureHint,
+			})
+		} else if reminder := guards.planReminder(result.Turns); reminder != "" {
 			messages = append(messages, zeroruntime.Message{
 				Role:    zeroruntime.MessageRoleUser,
 				Content: reminder,
@@ -208,6 +226,21 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 	result.FinalAnswer = maxTurnsAnswer
 	result.Messages = copyMessages(messages)
 	return result, nil
+}
+
+// toolSchemaJSON renders a tool's parameter schema as readable JSON for the
+// repeated-failure corrective hint, so the model can see exactly what arguments
+// the tool expects. Returns "{}" if the tool or schema is unavailable.
+func toolSchemaJSON(registry *tools.Registry, name string) string {
+	tool, ok := registry.Get(name)
+	if !ok {
+		return "{}"
+	}
+	data, err := json.MarshalIndent(schemaToRuntimeMap(tool.Parameters()), "", "  ")
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }
 
 func executeToolCall(ctx context.Context, registry *tools.Registry, call ToolCall, permissionMode PermissionMode, options Options) ToolResult {

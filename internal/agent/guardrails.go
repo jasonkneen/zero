@@ -29,7 +29,60 @@ const (
 
 	// planToolName is the planning tool the loop watches for by name.
 	planToolName = "update_plan"
+
+	// toolFailureHintAt injects a one-shot corrective hint (the tool's schema +
+	// the exact error) after a tool fails this many times in a row with the same
+	// error, so the model self-corrects instead of repeating the mistake.
+	toolFailureHintAt = 2
+	// toolFailureStopAt halts the run after a tool fails this many times in a row
+	// with the same error, so NO model (weak or strong) burns turns looping on a
+	// bad call.
+	toolFailureStopAt = 4
 )
+
+// toolFailureHintMarker is a stable substring for tests.
+const toolFailureHintMarker = "kept failing with the same error"
+
+type toolFailureRecord struct {
+	count     int
+	errSig    string
+	hintShown bool
+}
+
+type toolFailureOutcome struct {
+	InjectHint bool
+	Stop       bool
+	Count      int
+}
+
+// errorSignature normalizes a tool error to a short, comparable signature so
+// repeated identical failures are detected while a genuinely different error
+// resets the streak.
+func errorSignature(output string) string {
+	s := strings.ToLower(strings.Join(strings.Fields(output), " "))
+	if len(s) > 80 {
+		s = s[:80]
+	}
+	return s
+}
+
+// toolFailureHint tells the model exactly how a tool's arguments must look after
+// it has repeated the same failing call. Injected at most once per failure streak.
+func toolFailureHint(toolName, schemaJSON, errOutput string) string {
+	return "Your calls to the `" + toolName + "` tool " + toolFailureHintMarker + ":\n" +
+		strings.TrimSpace(errOutput) +
+		"\n\nThe `" + toolName + "` tool expects arguments matching this schema — match it exactly:\n" +
+		strings.TrimSpace(schemaJSON) +
+		"\n\nFix the arguments and try once more, or take a different approach."
+}
+
+// toolFailureStopAnswer is the final answer when the repeated-failure guard halts
+// a run.
+func toolFailureStopAnswer(toolName string, count int) string {
+	return "Agent stopped: the `" + toolName + "` tool failed " + strconv.Itoa(count) +
+		" times in a row with the same error, so I halted instead of looping further. " +
+		"Please check the request or adjust the tool arguments."
+}
 
 // noOutputStopAnswer is the final answer returned when the no-output guard
 // stops the run. The turn count is interpolated at the call site.
@@ -73,10 +126,44 @@ type guardState struct {
 	// the current stale interval. It is cleared when a plan update opens a new
 	// interval, making the reminder one-shot per interval rather than per turn.
 	staleReminderSent bool
+	// toolFailures tracks consecutive same-error failures per tool, keyed by tool
+	// name, so the loop can hint then halt instead of looping forever.
+	toolFailures map[string]*toolFailureRecord
 }
 
 func newGuardState() *guardState {
-	return &guardState{}
+	return &guardState{toolFailures: map[string]*toolFailureRecord{}}
+}
+
+// observeToolResult tracks repeated identical failures of a tool. A successful
+// result clears that tool's failure streak. Returns whether to inject a one-shot
+// corrective hint and/or stop the run.
+func (state *guardState) observeToolResult(name string, failed bool, output string) toolFailureOutcome {
+	if state.toolFailures == nil {
+		state.toolFailures = map[string]*toolFailureRecord{}
+	}
+	if !failed {
+		delete(state.toolFailures, name) // success resets the streak
+		return toolFailureOutcome{}
+	}
+	sig := errorSignature(output)
+	record := state.toolFailures[name]
+	if record == nil || record.errSig != sig {
+		record = &toolFailureRecord{count: 1, errSig: sig}
+		state.toolFailures[name] = record
+	} else {
+		record.count++
+	}
+	outcome := toolFailureOutcome{Count: record.count}
+	if record.count >= toolFailureStopAt {
+		outcome.Stop = true
+		return outcome
+	}
+	if record.count >= toolFailureHintAt && !record.hintShown {
+		record.hintShown = true
+		outcome.InjectHint = true
+	}
+	return outcome
 }
 
 // observeTurn updates counters from a turn's collected stream. It returns
