@@ -1,0 +1,121 @@
+package sandbox
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestDetectInteractiveCommandBlocksEditors(t *testing.T) {
+	cases := []struct {
+		name       string
+		command    string
+		wantCmd    string
+		wantSuggHint string
+	}{
+		{name: "vim", command: "vim main.go", wantCmd: "vim", wantSuggHint: "non-interactive"},
+		{name: "nano", command: "nano notes.txt", wantCmd: "nano"},
+		{name: "less pager", command: "less /var/log/syslog", wantCmd: "less", wantSuggHint: "cat"},
+		{name: "python repl", command: "python", wantCmd: "python", wantSuggHint: "-c"},
+		{name: "node repl", command: "node", wantCmd: "node", wantSuggHint: "-e"},
+		{name: "ssh interactive", command: "ssh host.example.com", wantCmd: "ssh"},
+		{name: "top", command: "top", wantCmd: "top"},
+		{name: "git rebase interactive", command: "git rebase -i HEAD~3", wantCmd: "git rebase -i"},
+		{name: "tail follow", command: "tail -f app.log", wantCmd: "tail -f"},
+		{name: "env prefix vim", command: "EDITOR=vim FOO=bar vim file", wantCmd: "vim"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := DetectInteractiveCommand(tc.command, "linux")
+			if !result.Interactive {
+				t.Fatalf("DetectInteractiveCommand(%q) = not interactive, want interactive", tc.command)
+			}
+			if result.Command != tc.wantCmd {
+				t.Fatalf("matched command = %q, want %q", result.Command, tc.wantCmd)
+			}
+			if result.Suggestion == "" {
+				t.Fatalf("expected an actionable suggestion for %q", tc.command)
+			}
+			if tc.wantSuggHint != "" && !strings.Contains(strings.ToLower(result.Suggestion), strings.ToLower(tc.wantSuggHint)) {
+				t.Fatalf("suggestion %q does not mention %q", result.Suggestion, tc.wantSuggHint)
+			}
+		})
+	}
+}
+
+func TestDetectInteractiveCommandAllowsNonInteractive(t *testing.T) {
+	cases := []string{
+		"",
+		"ls -la",
+		"go test ./...",
+		"python -c 'print(1)'",
+		"python3 script.py",
+		"node -e 'console.log(1)'",
+		"node build.js",
+		"cat file.txt",
+		"git rebase --continue",
+		"git status",
+		"tail -n 50 app.log",
+		"ssh host 'uptime'",
+		"grep -r foo .",
+	}
+	for _, command := range cases {
+		t.Run(command, func(t *testing.T) {
+			result := DetectInteractiveCommand(command, "linux")
+			if result.Interactive {
+				t.Fatalf("DetectInteractiveCommand(%q) = interactive (%q), want allowed", command, result.Command)
+			}
+		})
+	}
+}
+
+func TestDetectInteractiveCommandHonorsWindows(t *testing.T) {
+	// edit and notepad are Windows-only interactive launchers.
+	if result := DetectInteractiveCommand("notepad config.ini", "windows"); !result.Interactive {
+		t.Fatalf("expected notepad to be interactive on windows")
+	}
+	if result := DetectInteractiveCommand("notepad config.ini", "linux"); result.Interactive {
+		t.Fatalf("notepad should not be treated as interactive on linux")
+	}
+}
+
+func TestDetectInteractiveCommandFindsAcrossSeparators(t *testing.T) {
+	// Interactive commands hidden after a shell operator should still be caught.
+	for _, command := range []string{
+		"git pull && vim conflict.txt",
+		"echo hi; less log.txt",
+		"true | nano",
+	} {
+		result := DetectInteractiveCommand(command, "linux")
+		if !result.Interactive {
+			t.Fatalf("DetectInteractiveCommand(%q) = not interactive, want interactive", command)
+		}
+	}
+}
+
+func TestDetectInteractiveBypasses(t *testing.T) {
+	blocked := []string{
+		"/usr/bin/vim file.txt",       // absolute path
+		"\"vim\" file.txt",            // double-quoted program
+		"'vim' file.txt",              // single-quoted program
+		"echo $(vim file.txt)",        // command substitution
+		"echo `vim file.txt`",         // backtick substitution
+		"/bin/less /var/log/syslog",   // absolute pager
+	}
+	for _, cmd := range blocked {
+		if got := DetectInteractiveCommand(cmd, "linux"); !got.Interactive {
+			t.Errorf("expected %q to be detected as interactive", cmd)
+		}
+	}
+	// must NOT over-block legitimate non-interactive commands
+	allowed := []string{
+		"python script.py",            // script, not REPL
+		"cat vim.txt",                 // file named vim, not the editor
+		"grep ssh config.go",          // 'ssh' as a search term
+		"echo hello",
+	}
+	for _, cmd := range allowed {
+		if got := DetectInteractiveCommand(cmd, "linux"); got.Interactive {
+			t.Errorf("expected %q NOT to be flagged interactive (got %q)", cmd, got.Command)
+		}
+	}
+}

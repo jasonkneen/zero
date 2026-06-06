@@ -11,7 +11,33 @@ import (
 var (
 	networkCommandPattern     = regexp.MustCompile(`(?i)\b(curl|wget|scp|ssh|rsync|nc|netcat|python3?\s+-m\s+http\.server|npm\s+(install|add|publish|login)|pnpm\s+(install|add|publish)|yarn\s+(add|publish)|bun\s+(add|install|publish)|pip3?\s+install|go\s+get|git\s+clone|gh\s+(release\s+download|repo\s+clone|api))\b`)
 	destructiveCommandPattern = regexp.MustCompile(`(?i)(\brm\s+(-[A-Za-z]*r[A-Za-z]*f|-rf|-fr)\s+(/|\$HOME|~|\*)|\bmkfs\b|\bdd\s+if=|\bchmod\s+-R\s+777\b|\bchown\s+-R\b)`)
+	// destructiveExtraPatterns hold high-severity patterns that the legacy
+	// destructiveCommandPattern does not already cover. Folded in from the
+	// blueprint safe_bash.go without duplicating existing matches.
+	destructiveExtraPatterns = []*regexp.Regexp{
+		// Fork bomb (and minor spacing variants).
+		regexp.MustCompile(`:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:`),
+		// Writing to a raw block device (dd of=, redirect to /dev/sdX, etc.).
+		regexp.MustCompile(`(?i)>\s*/dev/(sd[a-z]+\d*|nvme\d+n\d+(p\d+)?|hd[a-z]+\d*|xvd[a-z]+\d*|mmcblk\d+)`),
+		regexp.MustCompile(`(?i)\bof=/dev/(sd[a-z]+\d*|nvme\d+n\d+(p\d+)?|hd[a-z]+\d*|xvd[a-z]+\d*|mmcblk\d+)`),
+		// rm -rf targeting the root, including long flags and --no-preserve-root.
+		regexp.MustCompile(`(?i)\brm\s+(-[A-Za-z]*\s+|--[a-z-]+\s+)*(/|/\*)(\s|$)`),
+		// mkfs.<fstype> form (e.g. mkfs.ext4) not caught by the bare \bmkfs\b above when followed by a dot.
+		regexp.MustCompile(`(?i)\bmkfs\.[a-z0-9]+\b`),
+	}
 )
+
+func matchesDestructive(command string) bool {
+	if destructiveCommandPattern.MatchString(command) {
+		return true
+	}
+	for _, pattern := range destructiveExtraPatterns {
+		if pattern.MatchString(command) {
+			return true
+		}
+	}
+	return false
+}
 
 func Classify(request Request) Risk {
 	categories := map[string]bool{}
@@ -41,7 +67,7 @@ func Classify(request Request) Risk {
 		if networkCommandPattern.MatchString(command) {
 			add("network", RiskCritical)
 		}
-		if destructiveCommandPattern.MatchString(command) {
+		if matchesDestructive(command) {
 			add("destructive", RiskCritical)
 		}
 		lowerCommand := strings.ToLower(command)

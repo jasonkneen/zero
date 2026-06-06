@@ -718,6 +718,48 @@ func quoteJSONString(value string) string {
 	return string(encoded)
 }
 
+func TestRunAppendsConfirmationPolicyToSystemPrompt(t *testing.T) {
+	provider := &mockProvider{
+		turns: [][]zeroruntime.StreamEvent{{
+			{Type: zeroruntime.StreamEventText, Content: "ok"},
+			{Type: zeroruntime.StreamEventDone},
+		}},
+	}
+
+	if _, err := Run(context.Background(), "do work", provider, Options{
+		Registry: tools.NewRegistry(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(provider.requests) == 0 {
+		t.Fatal("expected at least one provider request")
+	}
+	system := provider.requests[0].Messages[0]
+	if system.Role != zeroruntime.MessageRoleSystem {
+		t.Fatalf("expected first message to be system, got %s", system.Role)
+	}
+	if !strings.Contains(system.Content, defaultSystemPrompt) {
+		t.Fatalf("system prompt lost base instruction: %q", system.Content)
+	}
+	// Key markers from CONFIRMATION_POLICY.md must be present so the model self-polices.
+	for _, marker := range []string{"Confirmation Modes", "BLOCKED", "ALWAYS CONFIRM"} {
+		if !strings.Contains(system.Content, marker) {
+			t.Fatalf("system prompt missing confirmation policy marker %q", marker)
+		}
+	}
+}
+
+func TestSystemPromptEmbedsConfirmationPolicy(t *testing.T) {
+	prompt := buildSystemPrompt()
+	if !strings.HasPrefix(prompt, defaultSystemPrompt) {
+		t.Fatalf("system prompt should start with the base instruction, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "Confirmation Modes") {
+		t.Fatalf("embedded confirmation policy missing from system prompt")
+	}
+}
+
 func assertMessage(t *testing.T, message zeroruntime.Message, role zeroruntime.MessageRole, contentContains string) {
 	t.Helper()
 

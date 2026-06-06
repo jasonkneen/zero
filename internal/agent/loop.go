@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -14,6 +15,23 @@ import (
 
 const defaultSystemPrompt = "You are Zero, a terminal coding agent. Help with the current workspace and use tools when needed."
 const maxTurnsAnswer = "Agent reached maximum number of turns without a final answer."
+
+// confirmationPolicy is the de-branded safety policy appended to the system
+// prompt so the model self-polices before risky actions. It mirrors the
+// sandbox's enforced rules but applies model-side judgement first.
+//
+//go:embed confirmation_policy.md
+var confirmationPolicy string
+
+// buildSystemPrompt returns the base instruction with the confirmation policy
+// appended. It is built once per run so every turn shares the same system turn.
+func buildSystemPrompt() string {
+	policy := strings.TrimSpace(confirmationPolicy)
+	if policy == "" {
+		return defaultSystemPrompt
+	}
+	return defaultSystemPrompt + "\n\n" + policy
+}
 
 func Run(ctx context.Context, prompt string, provider Provider, options Options) (Result, error) {
 	if provider == nil {
@@ -35,7 +53,7 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 		permissionMode = PermissionModeAuto
 	}
 
-	messages := zeroruntime.SeedMessages(defaultSystemPrompt, prompt)
+	messages := zeroruntime.SeedMessages(buildSystemPrompt(), prompt)
 
 	result := Result{Messages: copyMessages(messages)}
 	for turn := 0; turn < maxTurns; turn++ {
