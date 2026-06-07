@@ -50,27 +50,64 @@ func DefaultDir(env map[string]string) string {
 	return filepath.Join(base, "zero", "skills")
 }
 
+// DuplicateName records two skills that resolved to the same frontmatter name.
+// Winner is the SKILL.md path of the skill that was kept (the one in the
+// lexicographically-first directory); Loser is the path that was dropped.
+type DuplicateName struct {
+	Name   string
+	Winner string
+	Loser  string
+}
+
 // Load scans dir for */SKILL.md files and returns the parsed skills sorted by
 // name. A missing directory yields an empty slice with no error; individual
 // malformed skill files are skipped rather than failing the whole load.
+//
+// When two skills declare the SAME frontmatter name, resolution is made
+// DETERMINISTIC by a documented rule: the skill in the lexicographically-first
+// directory name wins (os.ReadDir returns entries sorted by filename, so the
+// first one encountered is kept and later same-name duplicates are dropped).
+// This guarantees Load/List/Get always resolve a duplicated name to the same
+// winner regardless of sort stability. Use Duplicates to surface a warning about
+// any such collisions.
 //
 // NOTE: Load currently scans a single root (ZERO_SKILLS_DIR / the data dir).
 // Plugin-declared skill paths (the plugins manifest "skills" array) are NOT yet
 // merged into this lookup; multi-root loading is tracked as a separate feature.
 func Load(dir string) ([]Skill, error) {
+	skills, _, err := load(dir)
+	return skills, err
+}
+
+// Duplicates returns the duplicate-name collisions Load resolved by the
+// first-directory-wins rule, so a caller can warn the user that a shadowed skill
+// was dropped. A missing directory yields no duplicates and no error.
+func Duplicates(dir string) ([]DuplicateName, error) {
+	_, dups, err := load(dir)
+	return dups, err
+}
+
+// load is the shared scanner behind Load and Duplicates: it parses every
+// SKILL.md, deduplicates by frontmatter name (first directory wins) and reports
+// the dropped collisions.
+func load(dir string) ([]Skill, []DuplicateName, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
-		return []Skill{}, nil
+		return []Skill{}, nil, nil
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return []Skill{}, nil
+			return []Skill{}, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 
 	skills := make([]Skill, 0, len(entries))
+	// byName maps a frontmatter name to the index of the winning skill in skills,
+	// so a later same-name duplicate can be recognized and dropped deterministically.
+	byName := make(map[string]int, len(entries))
+	duplicates := []DuplicateName{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -86,13 +123,27 @@ func Load(dir string) ([]Skill, error) {
 		if resolved, absErr := filepath.Abs(manifestPath); absErr == nil {
 			absPath = resolved
 		}
-		skills = append(skills, parseSkill(entry.Name(), absPath, string(data)))
+		skill := parseSkill(entry.Name(), absPath, string(data))
+		if winnerIdx, clash := byName[skill.Name]; clash {
+			// os.ReadDir yields entries sorted by directory name, so the skill already
+			// recorded came from the lexicographically-first directory and wins; this
+			// later one is dropped (but reported as a duplicate).
+			duplicates = append(duplicates, DuplicateName{
+				Name:   skill.Name,
+				Winner: skills[winnerIdx].Path,
+				Loser:  skill.Path,
+			})
+			continue
+		}
+		byName[skill.Name] = len(skills)
+		skills = append(skills, skill)
 	}
 
+	// Names are unique after dedup, so this sort is fully deterministic.
 	sort.Slice(skills, func(left int, right int) bool {
 		return skills[left].Name < skills[right].Name
 	})
-	return skills, nil
+	return skills, duplicates, nil
 }
 
 // List loads the skills directory and returns each skill without its (possibly

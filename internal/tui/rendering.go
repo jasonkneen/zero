@@ -22,6 +22,22 @@ func (m model) runState() string {
 	return "ready"
 }
 
+// pickerBusyText explains that a settings picker (/model, /mode, /effort, /theme)
+// can't be opened while a run is in flight. Opening it then would silently refuse
+// the selection once the run lands, so the no-arg command no-ops into this notice.
+func pickerBusyText(name string) string {
+	label := strings.TrimPrefix(name, "/")
+	return renderCommandOutput(commandOutput{
+		Title:  label,
+		Status: commandStatusWarning,
+		Sections: []commandSection{{
+			Title: "Busy",
+			Lines: []string{"Can't change " + label + " while a run is in progress."},
+		}},
+		Hints: []string{"press Esc to cancel the run, then try again"},
+	})
+}
+
 func shellOnlyCommandText(name string) string {
 	return renderCommandOutput(commandOutput{
 		Title:  strings.TrimPrefix(name, "/"),

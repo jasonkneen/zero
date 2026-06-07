@@ -9,7 +9,6 @@ import (
 
 	"github.com/Gitlawb/zero/internal/agent"
 	"github.com/Gitlawb/zero/internal/tools"
-	"github.com/Gitlawb/zero/internal/zenline"
 )
 
 func newZenlineModel() model {
@@ -96,28 +95,6 @@ func TestZenlinePermissionRender(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("permission view missing %q", want)
 		}
-	}
-}
-
-func TestZenlineMousePermissionClick(t *testing.T) {
-	m := newZenlineModel()
-	m.showSplash = false
-	m.pending = true
-	resolved := ""
-	m.pendingPermission = &pendingPermissionPrompt{
-		request: agent.PermissionRequest{ToolName: "edit_file"},
-		decide:  func(d agent.PermissionDecision) { resolved = string(d.Action) },
-	}
-	g := zenline.PermLayout(m.width, m.height)
-	// click the center of the Deny button
-	click := tea.MouseMsg{X: g.Deny.X + g.Deny.W/2, Y: g.Deny.Y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
-	next, _ := m.Update(click)
-	nm := next.(model)
-	if nm.pendingPermission != nil {
-		t.Error("permission should be resolved after click")
-	}
-	if resolved == "" {
-		t.Error("decide callback not invoked by mouse click")
 	}
 }
 

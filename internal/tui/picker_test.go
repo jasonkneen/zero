@@ -130,6 +130,48 @@ func TestThemePickerOnlyInZenlineSkin(t *testing.T) {
 	}
 }
 
+func TestPickersRefuseToOpenWhileRunPending(t *testing.T) {
+	// A picker opened while a run is in flight would have its selection refused
+	// after the run, so opening it at all is misleading. Each no-arg picker command
+	// must no-op into a brief "while a run is in progress" message instead.
+	cases := []struct {
+		name    string
+		command string
+		skin    string
+	}{
+		{name: "model", command: "/model"},
+		{name: "mode", command: "/mode"},
+		{name: "effort", command: "/effort"},
+		{name: "theme", command: "/theme", skin: "zenline"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModel(context.Background(), Options{
+				Skin:      tc.skin,
+				ThemeDark: true,
+				ModelName: "claude-sonnet-4.5",
+			})
+			m.pending = true
+			m.input.SetValue(tc.command)
+
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			next := updated.(model)
+			if cmd != nil {
+				t.Fatalf("%s while pending should not start a run", tc.command)
+			}
+			if next.picker != nil {
+				t.Fatalf("%s should not open a picker while a run is in progress, got %#v", tc.command, next.picker)
+			}
+			if !transcriptContains(next.transcript, "while a run is in progress") {
+				t.Fatalf("%s should explain it can't change settings while a run is in progress, got %q", tc.command, transcriptText(next.transcript))
+			}
+			if !next.pending {
+				t.Fatalf("%s must not clear the in-flight run", tc.command)
+			}
+		})
+	}
+}
+
 func TestPickerRendersInBothSkins(t *testing.T) {
 	// Default skin.
 	m := newModel(context.Background(), Options{ModelName: "claude-sonnet-4.5"})

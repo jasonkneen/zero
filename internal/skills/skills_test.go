@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -126,6 +127,71 @@ func TestLoadSortsByName(t *testing.T) {
 	}
 	if loaded[0].Name != "alpha" || loaded[1].Name != "zeta" {
 		t.Fatalf("skills not sorted: %q, %q", loaded[0].Name, loaded[1].Name)
+	}
+}
+
+func TestLoadDuplicateFrontmatterNamePicksStableWinner(t *testing.T) {
+	dir := t.TempDir()
+	// Two skill directories whose frontmatter declares the SAME name. The documented
+	// rule: the skill in the lexicographically-first directory name wins, so resolution
+	// is deterministic regardless of os.ReadDir / sort ordering.
+	writeSkill(t, dir, "aaa-first", "---\nname: shared\ndescription: from aaa\n---\nbody from aaa\n")
+	writeSkill(t, dir, "zzz-second", "---\nname: shared\ndescription: from zzz\n---\nbody from zzz\n")
+
+	// Loading repeatedly must always yield the same single winner.
+	for i := 0; i < 20; i++ {
+		loaded, err := Load(dir)
+		if err != nil {
+			t.Fatalf("Load returned error: %v", err)
+		}
+		shared := 0
+		var winner Skill
+		for _, skill := range loaded {
+			if skill.Name == "shared" {
+				shared++
+				winner = skill
+			}
+		}
+		if shared != 1 {
+			t.Fatalf("expected exactly one skill named shared after dedup, got %d", shared)
+		}
+		if winner.Description != "from aaa" || winner.Content != "body from aaa" {
+			t.Fatalf("expected the aaa-first directory to win, got desc=%q content=%q", winner.Description, winner.Content)
+		}
+	}
+
+	// Get must resolve to the same documented winner.
+	got, ok := Get(dir, "shared")
+	if !ok {
+		t.Fatal("Get(shared) not found")
+	}
+	if got.Content != "body from aaa" {
+		t.Fatalf("Get resolved to non-winner: %q", got.Content)
+	}
+}
+
+func TestDuplicatesReportsCollidingNames(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "aaa-first", "---\nname: shared\n---\nbody\n")
+	writeSkill(t, dir, "zzz-second", "---\nname: shared\n---\nbody\n")
+	writeSkill(t, dir, "solo", "---\nname: solo\n---\nbody\n")
+
+	dups, err := Duplicates(dir)
+	if err != nil {
+		t.Fatalf("Duplicates returned error: %v", err)
+	}
+	if len(dups) != 1 {
+		t.Fatalf("expected exactly one duplicated name, got %d: %#v", len(dups), dups)
+	}
+	if dups[0].Name != "shared" {
+		t.Fatalf("expected the duplicated name to be shared, got %q", dups[0].Name)
+	}
+	// The winner is the lexicographically-first directory; the loser is reported too.
+	if dups[0].Winner == "" || dups[0].Loser == "" {
+		t.Fatalf("expected both winner and loser paths recorded, got %#v", dups[0])
+	}
+	if !strings.Contains(dups[0].Winner, "aaa-first") || !strings.Contains(dups[0].Loser, "zzz-second") {
+		t.Fatalf("expected aaa-first to win and zzz-second to lose, got winner=%q loser=%q", dups[0].Winner, dups[0].Loser)
 	}
 }
 

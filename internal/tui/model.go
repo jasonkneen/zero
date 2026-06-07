@@ -18,7 +18,6 @@ import (
 	"github.com/Gitlawb/zero/internal/sessions"
 	"github.com/Gitlawb/zero/internal/tools"
 	"github.com/Gitlawb/zero/internal/usage"
-	"github.com/Gitlawb/zero/internal/zenline"
 	"github.com/Gitlawb/zero/internal/zeroruntime"
 )
 
@@ -236,8 +235,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC:
+			// cancelRun records the in-flight run into flushRunIDs and writes the
+			// "Run cancelled." marker, exactly like the Esc path. If a run was still
+			// in flight we must NOT quit yet: the cancelled goroutine returns its
+			// accumulated session events (including the EventSessionCheckpoint blobs it
+			// already wrote to disk before each mutating tool) in a final
+			// agentResponseMsg, and quitting now would drop that message, orphaning the
+			// checkpoints and breaking /rewind for Ctrl+C'd runs. Defer the quit until
+			// that flush lands; the agentResponseMsg handler fires tea.Quit once
+			// flushRunIDs drains. With no run in flight there is nothing to flush, so
+			// quit immediately as before.
+			pendingFlush := false
+			if m.pending && m.activeRunID != 0 {
+				pendingFlush = true
+			}
 			m.cancelRun()
 			m.exiting = true
+			if pendingFlush && len(m.flushRunIDs) > 0 {
+				return m, nil
+			}
 			return m, tea.Quit
 		case tea.KeyEsc:
 			// An active questionnaire is cancelled (not the whole run): deliver
@@ -359,19 +375,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamingText += msg.delta
 		m.showSplash = false
 		return m, nil
-	case tea.MouseMsg:
-		if m.skin == "zenline" && m.pendingPermission != nil &&
-			msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			switch zenline.PermLayout(m.width, m.height).Hit(msg.X, msg.Y) {
-			case "allow":
-				return m.resolvePermission(permissionDecisionAllow)
-			case "always":
-				return m.resolvePermission(permissionDecisionAlwaysAllow)
-			case "deny":
-				return m.resolvePermission(permissionDecisionDeny)
-			}
-		}
-		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -414,6 +417,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if _, flushing := m.flushRunIDs[msg.runID]; flushing {
 				delete(m.flushRunIDs, msg.runID)
 				m, _ = m.appendSessionEvents(flushableSessionEvents(msg.sessionEvents))
+				// A Ctrl+C during an in-flight run defers its quit until the run's
+				// checkpoint session events have been flushed (above). Now that the
+				// last pending flush is drained, fire the deferred quit.
+				if m.exiting && len(m.flushRunIDs) == 0 {
+					return m, tea.Quit
+				}
 			}
 			return m, nil
 		}
@@ -683,6 +692,11 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 		return m, nil
 	case commandModel:
 		if strings.TrimSpace(command.text) == "" {
+			if m.pending {
+				m.showSplash = false
+				m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: pickerBusyText(command.name)})
+				return m, nil
+			}
 			if picker := m.newModelPicker(); picker != nil {
 				m.picker = picker
 				return m, nil
@@ -695,6 +709,11 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 		return m, nil
 	case commandMode:
 		if strings.TrimSpace(command.text) == "" {
+			if m.pending {
+				m.showSplash = false
+				m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: pickerBusyText(command.name)})
+				return m, nil
+			}
 			if picker := m.newModePicker(); picker != nil {
 				m.picker = picker
 				return m, nil
@@ -758,6 +777,11 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 		return m, nil
 	case commandEffort:
 		if strings.TrimSpace(command.text) == "" {
+			if m.pending {
+				m.showSplash = false
+				m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: pickerBusyText(command.name)})
+				return m, nil
+			}
 			if picker := m.newEffortPicker(); picker != nil {
 				m.picker = picker
 				return m, nil
@@ -778,6 +802,11 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 		// Only the zenline skin renders themes; there a no-argument /theme opens
 		// the picker. The default skin keeps its existing shell-only message.
 		if m.skin == "zenline" && strings.TrimSpace(command.text) == "" {
+			if m.pending {
+				m.showSplash = false
+				m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: pickerBusyText(command.name)})
+				return m, nil
+			}
 			if picker := m.newThemePicker(); picker != nil {
 				m.picker = picker
 				return m, nil

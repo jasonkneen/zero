@@ -783,6 +783,90 @@ func TestCancelledRunFlushesCheckpointSessionEvents(t *testing.T) {
 	assertPayloadField(t, cancelErr, "message", "Run cancelled.")
 }
 
+func TestCtrlCFlushesCheckpointSessionEvents(t *testing.T) {
+	store := testSessionStore(t)
+	root := t.TempDir()
+	writeTestFile(t, root, "notes.txt", "before")
+	provider := &scriptedProvider{scripts: [][]zeroruntime.StreamEvent{
+		writeFileToolScript("call_write", "notes.txt", "after"),
+		textScript("never reached"),
+	}}
+	registry := tools.NewRegistry()
+	registry.Register(tools.NewWriteFileTool(root))
+	runtimeMessageCh := make(chan tea.Msg, 8)
+	m := newPermissionTestModel(root, provider, registry, store, nil, runtimeMessageCh)
+	m.input.SetValue("rewrite notes")
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := updated.(model)
+	if cmd == nil {
+		t.Fatal("expected prompt submit to start an agent run")
+	}
+
+	finalCh := make(chan tea.Msg, 1)
+	go func() {
+		finalCh <- cmd()
+	}()
+
+	// Drain live runtime messages until the permission prompt is up; the tool call
+	// and its checkpoint snapshot are captured into the goroutine's in-flight
+	// sessionEvents before the run blocks on the permission decision.
+	cancelled := false
+	for !cancelled {
+		runtimeMsg := receiveRuntimeMessage(t, runtimeMessageCh)
+		updated, _ = next.Update(runtimeMsg)
+		next = updated.(model)
+		if _, ok := runtimeMsg.(permissionRequestMsg); ok {
+			// Ctrl+C while the permission prompt is pending: this must cancel the
+			// in-flight run (unblocking the goroutine via ctx) AND mark the model
+			// exiting — but it must NOT quit before the in-flight run's final
+			// message has been drained, or the captured checkpoint is orphaned.
+			var exitCmd tea.Cmd
+			updated, exitCmd = next.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+			next = updated.(model)
+			if !next.exiting {
+				t.Fatal("expected Ctrl+C to mark model exiting")
+			}
+			if exitCmd != nil {
+				t.Fatal("expected Ctrl+C to defer quit while an in-flight run still needs flushing")
+			}
+			cancelled = true
+		}
+	}
+	if next.pending {
+		t.Fatal("expected Ctrl+C to clear pending state")
+	}
+	if len(next.flushRunIDs) == 0 {
+		t.Fatal("expected cancelled run to be flagged for session-event flush")
+	}
+
+	// The cancelled goroutine still returns its accumulated session events. Deliver
+	// that final message; the checkpoint must be persisted even though activeRunID
+	// is already zeroed, and the deferred quit must fire now.
+	finalMsg := receiveFinalMessage(t, finalCh)
+	updated, quitCmd := next.Update(finalMsg)
+	next = updated.(model)
+	if len(next.flushRunIDs) != 0 {
+		t.Fatalf("expected flush set to clear after draining cancelled run, got %v", next.flushRunIDs)
+	}
+	if quitCmd == nil {
+		t.Fatal("expected deferred quit to fire once the in-flight run is flushed on Ctrl+C")
+	}
+
+	events := readOnlySessionEvents(t, store)
+	if countSessionEvents(events, sessions.EventSessionCheckpoint) != 1 {
+		t.Fatalf("expected the in-flight checkpoint to be persisted on Ctrl+C, got %#v", eventTypes(events))
+	}
+	if countSessionEvents(events, sessions.EventToolCall) != 1 {
+		t.Fatalf("expected the in-flight tool call to be persisted on Ctrl+C, got %#v", eventTypes(events))
+	}
+	// The cancel path records exactly one "Run cancelled." error; the goroutine's
+	// trailing cancellation error must be dropped, not double-recorded.
+	if got := countSessionEvents(events, sessions.EventError); got != 1 {
+		t.Fatalf("expected exactly one cancellation error event, got %d in %#v", got, eventTypes(events))
+	}
+}
+
 func TestResumedPromptIncludesSessionContext(t *testing.T) {
 	store := testSessionStore(t)
 	session, err := store.Create(sessions.CreateInput{Title: "Existing", Cwd: "repo", ModelID: "gpt-4.1", Provider: "openai"})
