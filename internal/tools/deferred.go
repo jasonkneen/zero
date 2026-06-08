@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	defaultShortenMax      = 200
-	maxSchemaHintParams    = 4
-	maxSchemaHintLen       = 360
+	defaultShortenMax   = 200
+	maxSchemaHintParams = 4
+	maxSchemaHintLen    = 360
 )
 
 var (

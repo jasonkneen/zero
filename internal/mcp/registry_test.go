@@ -201,7 +201,7 @@ type fakePreexistingTool struct {
 	name string
 }
 
-func (t *fakePreexistingTool) Name() string            { return t.name }
+func (t *fakePreexistingTool) Name() string             { return t.name }
 func (t *fakePreexistingTool) Description() string      { return "preexisting tool" }
 func (t *fakePreexistingTool) Parameters() tools.Schema { return tools.Schema{} }
 func (t *fakePreexistingTool) Safety() tools.Safety     { return tools.Safety{} }

@@ -15,8 +15,8 @@ type searchFakeTool struct {
 }
 
 func (t searchFakeTool) Name() string        { return t.name }
-func (t searchFakeTool) Description() string  { return t.description }
-func (t searchFakeTool) Parameters() Schema   { return t.parameters }
+func (t searchFakeTool) Description() string { return t.description }
+func (t searchFakeTool) Parameters() Schema  { return t.parameters }
 func (t searchFakeTool) Safety() Safety {
 	return Safety{SideEffect: SideEffectRead, Permission: PermissionAllow}
 }
