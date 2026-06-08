@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Gitlawb/zero/internal/tools"
@@ -174,5 +175,62 @@ func TestPartitionToolsBelowThresholdInactive(t *testing.T) {
 	}
 	if len(exposed) != 2 {
 		t.Fatalf("expected both deferred tools exposed below threshold, got %#v", exposed)
+	}
+}
+
+func TestPartitionToolsActiveHidesUnloadedExposesLoaded(t *testing.T) {
+	root := t.TempDir()
+	registry := tools.NewRegistry()
+	registry.Register(tools.NewReadFileTool(root)) // non-deferred builtin
+	registry.Register(fakeToolSearchTool{})        // non-deferred, must stay exposed
+	registry.Register(fakeDeferredTool{name: "mcp__srv__alpha", desc: "alpha tool"})
+	registry.Register(fakeDeferredTool{name: "mcp__srv__beta", desc: "beta tool"})
+
+	loaded := map[string]bool{"mcp__srv__alpha": true}
+
+	// 2 eligible deferred tools, threshold 2 => active.
+	exposed, reminder := partitionTools(registry, PermissionModeAuto, Options{DeferThreshold: 2}, loaded)
+
+	exposedNames := map[string]bool{}
+	for _, def := range exposed {
+		exposedNames[def.Name] = true
+	}
+	if !exposedNames["read_file"] {
+		t.Fatalf("expected builtin read_file exposed, got %#v", exposed)
+	}
+	if !exposedNames["tool_search"] {
+		t.Fatalf("expected tool_search exposed on active path, got %#v", exposed)
+	}
+	if !exposedNames["mcp__srv__alpha"] {
+		t.Fatalf("expected loaded deferred tool exposed, got %#v", exposed)
+	}
+	if exposedNames["mcp__srv__beta"] {
+		t.Fatalf("unloaded deferred tool must be hidden from exposed, got %#v", exposed)
+	}
+	if reminder == "" {
+		t.Fatalf("expected a non-empty reminder for the hidden tool")
+	}
+	if !strings.Contains(reminder, "mcp__srv__beta") {
+		t.Fatalf("expected reminder to list the hidden tool, got %q", reminder)
+	}
+	if strings.Contains(reminder, "mcp__srv__alpha") {
+		t.Fatalf("loaded tool must not appear in the reminder, got %q", reminder)
+	}
+}
+
+func TestPartitionToolsActiveNothingHiddenEmptyReminder(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.Register(fakeDeferredTool{name: "mcp__srv__alpha", desc: "alpha"})
+	registry.Register(fakeDeferredTool{name: "mcp__srv__beta", desc: "beta"})
+
+	loaded := map[string]bool{"mcp__srv__alpha": true, "mcp__srv__beta": true}
+	exposed, reminder := partitionTools(registry, PermissionModeAuto, Options{DeferThreshold: 2}, loaded)
+
+	if len(exposed) != 2 {
+		t.Fatalf("expected both loaded deferred tools exposed, got %#v", exposed)
+	}
+	// BuildDeferredReminder returns "" for no hidden lines.
+	if reminder != "" {
+		t.Fatalf("expected empty reminder when nothing is hidden, got %q", reminder)
 	}
 }
