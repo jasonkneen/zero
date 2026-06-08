@@ -9,7 +9,6 @@ import (
 
 const (
 	defaultShortenMax      = 200
-	maxParamDescriptionLen = 80
 	maxSchemaHintParams    = 4
 	maxSchemaHintLen       = 360
 )

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -192,7 +193,7 @@ func renderLoadedTools(matches []Tool) string {
 	if len(matches) == 1 {
 		builder.WriteString("1 tool")
 	} else {
-		builder.WriteString(toolSearchItoa(len(matches)))
+		builder.WriteString(strconv.Itoa(len(matches)))
 		builder.WriteString(" tools")
 	}
 	builder.WriteString(". Full schemas follow; call them on the next turn.\n")
@@ -212,18 +213,4 @@ func renderLoadedTools(matches []Tool) string {
 		builder.WriteString("\n")
 	}
 	return builder.String()
-}
-
-// toolSearchItoa renders a small non-negative count without importing strconv
-// just for the listing header.
-func toolSearchItoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return string(digits)
 }
