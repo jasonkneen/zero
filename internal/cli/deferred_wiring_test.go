@@ -43,7 +43,7 @@ func TestRegisterToolSearchIfEligibleRegistersAtThreshold(t *testing.T) {
 		registry.Register(cliFakeDeferredTool{name: "mcp_srv_t" + string(rune('a'+i))})
 	}
 
-	registerToolSearchIfEligible(registry, 3)
+	registerToolSearchIfEligible(registry, 3, agent.PermissionModeAuto, nil, nil)
 
 	if !registryHasToolSearch(registry) {
 		t.Fatal("expected tool_search registered when eligible count == threshold")
@@ -57,7 +57,7 @@ func TestRegisterToolSearchIfEligibleSkipsBelowThreshold(t *testing.T) {
 	// A plain (non-deferred) MCP-named tool must NOT count toward eligibility.
 	registry.Register(cliFakeMCPRegistryTool{})
 
-	registerToolSearchIfEligible(registry, 3)
+	registerToolSearchIfEligible(registry, 3, agent.PermissionModeAuto, nil, nil)
 
 	if registryHasToolSearch(registry) {
 		t.Fatal("expected no tool_search when eligible count (2) < threshold (3)")
@@ -70,7 +70,7 @@ func TestRegisterToolSearchIfEligibleSkipsWhenThresholdZero(t *testing.T) {
 		registry.Register(cliFakeDeferredTool{name: "mcp_srv_t" + string(rune('a'+i))})
 	}
 
-	registerToolSearchIfEligible(registry, 0)
+	registerToolSearchIfEligible(registry, 0, agent.PermissionModeAuto, nil, nil)
 
 	if registryHasToolSearch(registry) {
 		t.Fatal("expected no tool_search when threshold is 0 (disabled)")
@@ -80,8 +80,47 @@ func TestRegisterToolSearchIfEligibleSkipsWhenThresholdZero(t *testing.T) {
 func TestDeferredEligibleCountIgnoresCoreTools(t *testing.T) {
 	registry := newCoreRegistry(t.TempDir())
 	// newCoreRegistry holds only built-ins; none implement Deferred().
-	if got := deferredEligibleCount(registry); got != 0 {
+	if got := deferredEligibleCount(registry, agent.PermissionModeAuto, nil, nil); got != 0 {
 		t.Fatalf("deferredEligibleCount(core) = %d, want 0", got)
+	}
+}
+
+// FIX 1: a deferred tool the operator hid via --disabled-tools must NOT count
+// toward the visible-deferred total, so registration agrees with the loop's
+// activation gate. Two deferred + threshold 2 normally registers tool_search;
+// disabling one drops the visible count to 1 (< 2) so it must NOT register.
+func TestRegisterToolSearchSkipsWhenDisabledDropsVisibleBelowThreshold(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.Register(cliFakeDeferredTool{name: "mcp_srv_ta"})
+	registry.Register(cliFakeDeferredTool{name: "mcp_srv_tb"})
+
+	registerToolSearchIfEligible(registry, 2, agent.PermissionModeAuto, nil, []string{"mcp_srv_tb"})
+
+	if registryHasToolSearch(registry) {
+		t.Fatal("expected no tool_search: a disabled deferred tool must not count toward the visible-deferred total")
+	}
+}
+
+// FIX 3: validateExecToolFilters must treat tool_search as always-valid even
+// though it is not registered yet at validation time (it is registered later only
+// when deferral activates). Listing it in --enabled-tools/--disabled-tools must
+// not raise "Unknown tool".
+func TestValidateExecToolFiltersAllowsToolSearch(t *testing.T) {
+	registry := newCoreRegistry(t.TempDir())
+	// tool_search is NOT registered in this registry — it would be added later.
+	if _, present := registry.Get(tools.ToolSearchToolName); present {
+		t.Fatalf("precondition: tool_search must not be registered yet")
+	}
+
+	if err := validateExecToolFilters(execOptions{enabledTools: []string{tools.ToolSearchToolName}}, registry); err != nil {
+		t.Fatalf("--enabled-tools tool_search must validate, got error: %v", err)
+	}
+	if err := validateExecToolFilters(execOptions{disabledTools: []string{tools.ToolSearchToolName}}, registry); err != nil {
+		t.Fatalf("--disabled-tools tool_search must validate, got error: %v", err)
+	}
+	// A genuinely unknown tool still errors.
+	if err := validateExecToolFilters(execOptions{enabledTools: []string{"definitely_not_a_tool"}}, registry); err == nil {
+		t.Fatal("expected an Unknown tool error for an unregistered, non-tool_search name")
 	}
 }
 
