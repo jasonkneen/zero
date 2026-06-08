@@ -33,8 +33,23 @@ type optionsAwareTool interface {
 	RunWithOptions(ctx context.Context, args map[string]any, options RunOptions) Result
 }
 
+// deferredTool is an optional interface a tool implements to mark itself
+// deferred-eligible: when many such tools are registered, the agent loop may
+// withhold their full schema and advertise them via tool_search instead.
+type deferredTool interface {
+	Deferred() bool
+}
+
 func NewRegistry() *Registry {
 	return &Registry{tools: make(map[string]Tool)}
+}
+
+// IsDeferred reports whether a tool opts into deferred loading. A tool is
+// deferred-eligible only if it implements deferredTool and its Deferred()
+// method returns true; tools that do not implement the interface are eager.
+func IsDeferred(t Tool) bool {
+	d, ok := t.(deferredTool)
+	return ok && d.Deferred()
 }
 
 func (registry *Registry) Register(tool Tool) {
