@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/Gitlawb/zero/internal/config"
+	"github.com/Gitlawb/zero/internal/mcp"
 	"github.com/Gitlawb/zero/internal/tools"
 )
 
@@ -74,5 +79,40 @@ func TestDeferredEligibleCountIgnoresCoreTools(t *testing.T) {
 	// newCoreRegistry holds only built-ins; none implement Deferred().
 	if got := deferredEligibleCount(registry); got != 0 {
 		t.Fatalf("deferredEligibleCount(core) = %d, want 0", got)
+	}
+}
+
+func TestRunExecListToolsBelowThresholdHasNoToolSearch(t *testing.T) {
+	cwd := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithDeps([]string{"exec", "--list-tools"}, &stdout, &stderr, appDeps{
+		getwd: func() (string, error) { return cwd, nil },
+		resolveConfig: func(string, config.Overrides) (config.ResolvedConfig, error) {
+			return config.ResolvedConfig{}, errors.New("provider should not be resolved for --list-tools")
+		},
+		resolveMCPConfig: func(string) (config.MCPConfig, error) {
+			return config.MCPConfig{Servers: map[string]config.MCPServerConfig{
+				"docs": {Type: "stdio", Command: "docs-mcp"},
+			}}, nil
+		},
+		newMCPStore: func() (*mcp.PermissionStore, error) { return nil, nil },
+		registerMCPTools: func(_ context.Context, registry *tools.Registry, _ config.MCPConfig, _ mcp.RegisterOptions) (mcpToolRuntime, error) {
+			// One deferred-eligible MCP tool — far below the default threshold of 10.
+			registry.Register(cliFakeMCPRegistryTool{})
+			return closeFunc(func() error { return nil }), nil
+		},
+	})
+
+	if exitCode != exitSuccess {
+		t.Fatalf("expected exit %d, got %d: %s", exitSuccess, exitCode, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "mcp_docs_lookup") {
+		t.Fatalf("expected MCP tool advertised below threshold, got %q", out)
+	}
+	if strings.Contains(out, "tool_search") {
+		t.Fatalf("expected NO tool_search below threshold, got %q", out)
 	}
 }
