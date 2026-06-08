@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Gitlawb/zero/internal/tools"
+	"github.com/Gitlawb/zero/internal/zeroruntime"
 )
 
 func TestOptionsDeferThresholdFieldExists(t *testing.T) {
@@ -232,5 +233,68 @@ func TestPartitionToolsActiveNothingHiddenEmptyReminder(t *testing.T) {
 	// BuildDeferredReminder returns "" for no hidden lines.
 	if reminder != "" {
 		t.Fatalf("expected empty reminder when nothing is hidden, got %q", reminder)
+	}
+}
+
+func TestRunLoadsDeferredToolThenAdvertisesNextTurn(t *testing.T) {
+	registry := tools.NewRegistry()
+	// load_signal asks the loop to load mcp__srv__alpha next turn.
+	registry.Register(loadSignalTool{value: "mcp__srv__alpha"})
+	registry.Register(fakeDeferredTool{name: "mcp__srv__alpha", desc: "alpha tool"})
+	registry.Register(fakeDeferredTool{name: "mcp__srv__beta", desc: "beta tool"})
+
+	provider := &mockProvider{turns: [][]zeroruntime.StreamEvent{
+		{ // turn 1: call load_signal
+			{Type: zeroruntime.StreamEventToolCallStart, ToolCallID: "c1", ToolName: "load_signal"},
+			{Type: zeroruntime.StreamEventToolCallEnd, ToolCallID: "c1"},
+			{Type: zeroruntime.StreamEventDone},
+		},
+		{ // turn 2: final answer
+			{Type: zeroruntime.StreamEventText, Content: "done"},
+			{Type: zeroruntime.StreamEventDone},
+		},
+	}}
+
+	result, err := Run(context.Background(), "go", provider, Options{
+		Registry:       registry,
+		DeferThreshold: 2, // 2 deferred tools => active
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected two turns, got %d", len(provider.requests))
+	}
+
+	// Turn 1: alpha is hidden (not advertised) and the reminder is a trailing user msg.
+	turn1Tools := map[string]bool{}
+	for _, def := range provider.requests[0].Tools {
+		turn1Tools[def.Name] = true
+	}
+	if turn1Tools["mcp__srv__alpha"] {
+		t.Fatalf("turn 1 must not advertise the not-yet-loaded deferred tool")
+	}
+	last1 := provider.requests[0].Messages[len(provider.requests[0].Messages)-1]
+	if last1.Role != zeroruntime.MessageRoleUser || !strings.Contains(last1.Content, "tool_search") {
+		t.Fatalf("turn 1 request must end with the deferred-tools reminder, got role=%s content=%q", last1.Role, last1.Content)
+	}
+
+	// Turn 2: alpha is now loaded and advertised with a full schema.
+	turn2Tools := map[string]bool{}
+	for _, def := range provider.requests[1].Tools {
+		turn2Tools[def.Name] = true
+	}
+	if !turn2Tools["mcp__srv__alpha"] {
+		t.Fatalf("turn 2 must advertise the loaded deferred tool, got %#v", provider.requests[1].Tools)
+	}
+	if turn2Tools["mcp__srv__beta"] {
+		t.Fatalf("beta was never loaded; it must stay hidden in turn 2")
+	}
+
+	// The reminder must NOT persist into the returned message history.
+	for _, m := range result.Messages {
+		if m.Role == zeroruntime.MessageRoleUser && strings.Contains(m.Content, "Call tool_search") {
+			t.Fatalf("the deferred-tools reminder must not be persisted in result.Messages")
+		}
 	}
 }

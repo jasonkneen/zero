@@ -61,6 +61,11 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 	guards := newGuardState()
 	compactor := newCompactionState(options)
 
+	// loaded tracks deferred-eligible tools the model has pulled via tool_search
+	// during THIS run. It is consulted by partitionTools each turn to expose a
+	// loaded tool's full schema; it lives only for the run (v1 within-run scope).
+	loaded := map[string]bool{}
+
 	result := Result{Messages: copyMessages(messages)}
 	for turn := 0; turn < maxTurns; turn++ {
 		result.Turns = turn + 1
@@ -70,9 +75,19 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 		// request. A no-op when ContextWindow == 0 (compaction disabled).
 		messages = compactor.maybeCompact(ctx, provider, messages)
 
+		exposed, reminder := partitionTools(registry, permissionMode, options, loaded)
 		request := zeroruntime.CompletionRequest{
 			Messages: copyMessages(messages),
-			Tools:    toolDefinitions(registry, permissionMode, options),
+			Tools:    exposed,
+		}
+		if reminder != "" {
+			// Append to the per-turn request copy only — NEVER to persistent
+			// messages — so the reminder refreshes each turn and never accumulates
+			// in the saved transcript.
+			request.Messages = append(request.Messages, zeroruntime.Message{
+				Role:    zeroruntime.MessageRoleUser,
+				Content: reminder,
+			})
 		}
 
 		// Report the per-category context budget for this turn so a surface can
@@ -200,6 +215,12 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 			toolResult, abortErr := executeToolCall(ctx, registry, call, permissionMode, options)
 			if options.OnToolResult != nil {
 				options.OnToolResult(toolResult)
+			}
+			// Union the deferred tools this result asked to load into the per-run
+			// set BEFORE any abort/stop/guard branch, so a load that coincides with
+			// a turn-ending result is still recorded for the next turn's partition.
+			for _, name := range toolResult.LoadedTools {
+				loaded[name] = true
 			}
 			messages = append(messages, zeroruntime.Message{
 				Role:       zeroruntime.MessageRoleTool,
