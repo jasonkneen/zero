@@ -52,6 +52,49 @@ func newDeferredFixtureRegistry() *Registry {
 	return reg
 }
 
+func TestToolSearchKeywordRanksByNameThenDescription(t *testing.T) {
+	reg := NewRegistry()
+	// name match should outrank a description-only match.
+	reg.Register(searchFakeTool{
+		name:        "weather_lookup",
+		description: "Look up the current weather for a city.",
+		parameters:  Schema{Type: "object", AdditionalProperties: false},
+	})
+	reg.Register(searchFakeTool{
+		name:        "forecast_report",
+		description: "Generates a multi-day weather outlook.",
+		parameters:  Schema{Type: "object", AdditionalProperties: false},
+	})
+	tool := NewToolSearchTool(reg).(optionsAwareTool)
+
+	result := tool.RunWithOptions(context.Background(),
+		map[string]any{"query": "weather"}, RunOptions{})
+
+	if result.Status != StatusOK {
+		t.Fatalf("status = %s, want ok", result.Status)
+	}
+	loaded := result.Meta["load_tools"]
+	// Both match "weather"; the name match (weather_lookup) must come first.
+	if loaded != "weather_lookup,forecast_report" {
+		t.Fatalf("load_tools = %q, want weather_lookup,forecast_report (name match ranked first)", loaded)
+	}
+}
+
+func TestToolSearchKeywordExcludesNonMatches(t *testing.T) {
+	reg := newDeferredFixtureRegistry()
+	tool := NewToolSearchTool(reg).(optionsAwareTool)
+
+	result := tool.RunWithOptions(context.Background(),
+		map[string]any{"query": "stock"}, RunOptions{})
+
+	if got := result.Meta["load_tools"]; got != "stock_quote" {
+		t.Fatalf("load_tools = %q, want only stock_quote", got)
+	}
+	if strings.Contains(result.Output, "weather_lookup") {
+		t.Fatalf("non-matching tool weather_lookup leaked into output: %q", result.Output)
+	}
+}
+
 func TestToolSearchSelectLoadsExactNames(t *testing.T) {
 	reg := newDeferredFixtureRegistry()
 	tool := NewToolSearchTool(reg)
