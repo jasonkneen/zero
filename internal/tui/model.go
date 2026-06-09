@@ -81,6 +81,7 @@ type model struct {
 	themeDark        bool   // zeroline light/dark
 	frame            int    // animation frame counter (zeroline spinner)
 	booted           bool   // zeroline boot splash finished
+	jsonMode         bool   // zeroline TEXT/JSON view toggle (ctrl+j)
 	streamingText    string // live assistant text for the current segment
 	streamStartFrame int    // frame the current stream segment began (tok/s)
 

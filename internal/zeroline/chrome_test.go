@@ -10,7 +10,7 @@ import (
 func TestTitleBarSegmentsAndWidth(t *testing.T) {
 	s := newStyles(Resolve(0, true), 0, true)
 	h := Header{Cwd: "~/src/shop", Branch: "main", Dirty: true, Model: "claude-sonnet-4-5"}
-	out := s.topBar("normal", h, 110)
+	out := s.topBar("normal", h, 110, false)
 	if lipgloss.Height(out) != 1 {
 		t.Fatalf("title bar must be one row, got %d", lipgloss.Height(out))
 	}
@@ -28,7 +28,7 @@ func TestTitleBarSegmentsAndWidth(t *testing.T) {
 func TestTitleBarHidesCwdWhenTight(t *testing.T) {
 	s := newStyles(Resolve(0, true), 0, true)
 	h := Header{Cwd: "~/src/shop", Branch: "main", Model: "m"}
-	out := s.topBar("normal", h, 48)
+	out := s.topBar("normal", h, 48, false)
 	if lipgloss.Width(out) != 48 {
 		t.Fatalf("tight title bar width = %d, want 48", lipgloss.Width(out))
 	}

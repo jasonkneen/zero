@@ -93,6 +93,7 @@ type ChatData struct {
 	Stream        string // live assistant text being streamed
 	TokS          int    // streaming tokens/sec
 	Spin          int
+	JSONMode      bool // render the run as syntax-colored JSON instead of the transcript
 	Perm          *Perm
 	// AskUser, when non-nil, is a pending ask_user questionnaire. It renders the
 	// focused question (over the spinner) so the zeroline skin mirrors the default
@@ -265,7 +266,7 @@ func RenderChat(d ChatData) string {
 		run = "done"
 	}
 
-	top := s.topBar(run, d.Header, w)
+	top := s.topBar(run, d.Header, w, d.JSONMode)
 	bottom := s.botBar(run, d.Header, d.Variant, d.TokS, w)
 	cmd := s.cmdRegion(d, w)
 
@@ -300,9 +301,12 @@ func RenderChat(d ChatData) string {
 		bodyH = 1
 	}
 	var body string
-	if d.Perm != nil {
+	switch {
+	case d.Perm != nil:
 		body = s.permModal(d.Perm, w, bodyH)
-	} else {
+	case d.JSONMode:
+		body = s.jsonView(d, w, bodyH)
+	default:
 		body = s.transcript(d, w, bodyH)
 	}
 	frame := top + "\n" + body + "\n" + cmd
@@ -528,7 +532,7 @@ func PermLayout(width, height int) PermGeometry {
 // the right. The title bar is the window chrome (no outer frame is drawn). cwd is
 // hidden at tight widths. run is accepted for signature stability; the run mode
 // now lives in the status bar.
-func (s styles) topBar(run string, h Header, w int) string {
+func (s styles) topBar(run string, h Header, w int, jsonMode bool) string {
 	p := s.pal
 	b1 := func(in string) string { return lipgloss.NewStyle().Background(p.Panel2).Padding(0, 1).Render(in) }
 	b2 := func(in string) string { return lipgloss.NewStyle().Background(p.Panel).Padding(0, 1).Render(in) }
@@ -541,7 +545,7 @@ func (s styles) topBar(run string, h Header, w int) string {
 		left += b2(s.dim.Render(shortPath(h.Cwd)))
 	}
 
-	seg := s.segToggle(true) // TEXT active by default; JSON toggle is wired in Phase 7.
+	seg := s.segToggle(!jsonMode) // TEXT active unless JSON mode is on
 	dirty := ""
 	if h.Dirty {
 		dirty = s.amb.Render("✱")
@@ -901,6 +905,113 @@ func (s styles) noteLines(text string, deny bool, w int) []string {
 		out = append(out, st.Render("│ "+clip(ln, w-2)))
 	}
 	return out
+}
+
+// ---- JSON mode (TEXT/JSON toggle) ----
+
+// jsonField is one colored key/value in a JSON event line. kind selects the
+// value color: "str" (ink), "num" (amber), "type" (accent).
+type jsonField struct{ key, val, kind string }
+
+func jsonEscape(s string) string {
+	r := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n", "\t", "\\t")
+	return r.Replace(s)
+}
+
+// jsonObjectLine renders one colored JSON object line (keys blue, punctuation
+// faint), clipped to w.
+func (s styles) jsonObjectLine(fields []jsonField, w int) string {
+	blue := lipgloss.NewStyle().Foreground(s.pal.Blue)
+	punct := s.mute
+	var b strings.Builder
+	b.WriteString(punct.Render("{"))
+	for i, f := range fields {
+		if i > 0 {
+			b.WriteString(punct.Render(", "))
+		}
+		b.WriteString(blue.Render(`"`+f.key+`"`) + punct.Render(": "))
+		switch f.kind {
+		case "num":
+			b.WriteString(s.amb.Render(f.val))
+		case "type":
+			b.WriteString(s.acc.Render(`"` + f.val + `"`))
+		default:
+			b.WriteString(s.fg.Render(`"` + jsonEscape(clip(f.val, 64)) + `"`))
+		}
+	}
+	b.WriteString(punct.Render("}"))
+	return clip(b.String(), w)
+}
+
+// jsonRow maps a transcript row to a JSON event line (the events Zero would emit
+// headless). Returns "" for rows with no JSON representation.
+func (s styles) jsonRow(r Row, w int) string {
+	switch r.Kind {
+	case "user":
+		return s.jsonObjectLine([]jsonField{{"type", "user", "type"}, {"text", firstLine(r.Text), "str"}}, w)
+	case "assistant":
+		return s.jsonObjectLine([]jsonField{{"type", "text", "type"}, {"text", firstLine(r.Text), "str"}}, w)
+	case "final":
+		return s.jsonObjectLine([]jsonField{{"type", "result", "type"}, {"text", firstLine(r.Text), "str"}}, w)
+	case "tool":
+		fields := []jsonField{{"type", "tool_use", "type"}, {"name", r.Tool, "str"}}
+		if r.Text != "" {
+			fields = append(fields, jsonField{"target", firstLine(r.Text), "str"})
+		}
+		st := r.Status
+		switch {
+		case r.Running:
+			st = "running"
+		case st == "":
+			st = "ok"
+		}
+		return s.jsonObjectLine(append(fields, jsonField{"status", st, "str"}), w)
+	case "done":
+		exit := "0"
+		if r.Status == "error" {
+			exit = "1"
+		}
+		return s.jsonObjectLine([]jsonField{{"type", "done", "type"}, {"exit", exit, "num"}, {"summary", firstLine(r.Text), "str"}}, w)
+	case "system":
+		return s.jsonObjectLine([]jsonField{{"type", "system", "type"}, {"text", firstLine(r.Text), "str"}}, w)
+	case "error":
+		return s.jsonObjectLine([]jsonField{{"type", "error", "type"}, {"text", firstLine(r.Text), "str"}}, w)
+	default:
+		return ""
+	}
+}
+
+// jsonView renders the run as a synthetic stream of syntax-colored JSON events:
+// a faint `$ zero run -p "…" --format json` header + one event line per row.
+func (s styles) jsonView(d ChatData, w, h int) string {
+	jw := w - 4
+	punct := s.mute
+	task := ""
+	for _, r := range d.Rows {
+		if r.Kind == "user" {
+			task = firstLine(r.Text)
+			break
+		}
+	}
+	header := punct.Render("$ ") + s.acc.Bold(true).Render("zero run") +
+		punct.Render(" -p ") + s.fg.Render(`"`+clip(task, 40)+`"`) +
+		punct.Render(" --model "+orDash(d.Header.Model)+" --format json")
+	lines := []string{clip(header, jw), ""}
+	for _, r := range d.Rows {
+		if l := s.jsonRow(r, jw); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if d.Stream != "" {
+		lines = append(lines, s.jsonObjectLine([]jsonField{{"type", "text_delta", "type"}, {"text", firstLine(d.Stream), "str"}}, jw-1)+s.acc.Render("▌"))
+	}
+	if len(lines) > h {
+		lines = lines[len(lines)-h:]
+	}
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	return lipgloss.NewStyle().PaddingLeft(2).Render(strings.Join(lines, "\n"))
 }
 
 const cardBodyMax = 40 // cap card body lines so one tool can't dominate the frame

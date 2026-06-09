@@ -26,6 +26,7 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 	perm := fs.Bool("perm", false, "show the centered permission modal in the chat snapshot")
 	boot := fs.Int("boot", -1, "render the boot splash at the given animation frame")
 	stream := fs.Bool("stream", false, "show a streaming assistant response in the chat snapshot")
+	jsonMode := fs.Bool("json", false, "render the chat snapshot in JSON mode (TEXT/JSON toggle)")
 	width := fs.Int("width", 100, "snapshot width")
 	height := fs.Int("height", 30, "snapshot height")
 	skipUnsafe := fs.Bool("skip-permissions-unsafe", false, "launch in unsafe permission mode (enables the ! shell escape)")
@@ -63,6 +64,9 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 			}
 			if *perm {
 				cd.Perm = &zeroline.Perm{Tool: "edit_file", Risk: "medium", Reason: "writes internal/agent/exec.go and loop.go", Summary: "write"}
+			}
+			if *jsonMode {
+				cd.JSONMode = true
 			}
 			if *stream {
 				cd.Rows = cd.Rows[:len(cd.Rows)-1] // drop the final assistant row

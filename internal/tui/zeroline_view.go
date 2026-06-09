@@ -32,6 +32,9 @@ func (m model) handleZerolineKeys(msg tea.KeyMsg) (model, bool) {
 	case "ctrl+t":
 		m.themeVariant = (m.themeVariant + 1) % len(zeroline.Themes)
 		return m, true
+	case "ctrl+j":
+		m.jsonMode = !m.jsonMode // TEXT/JSON view toggle
+		return m, true
 	}
 	if strings.TrimSpace(m.input.Value()) == "" {
 		if k := msg.String(); len(k) == 1 && k >= "1" && k <= "5" {
@@ -121,6 +124,7 @@ func (m model) zerolineView() string {
 		Stream:      m.streamingText,
 		TokS:        m.streamTokS(),
 		Spin:        m.frame,
+		JSONMode:    m.jsonMode,
 		Perm:        m.zerolinePerm(),
 		AskUser:     askUser,
 		Input:       m.input.View(),
