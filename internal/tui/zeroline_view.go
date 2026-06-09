@@ -165,23 +165,6 @@ func (m model) zerolineView() string {
 
 	header := m.zerolineHeader()
 
-	// Home until the first turn is submitted.
-	if m.showSplash {
-		return zeroline.RenderHome(zeroline.HomeData{
-			Variant:     m.themeVariant,
-			Dark:        m.themeDark,
-			Width:       width,
-			Height:      height,
-			Header:      header,
-			Input:       m.input.View(),
-			Chips:       zeroline.DefaultChips(),
-			ChipIndex:   -1, // resting state: chips are suggestions, none pre-selected
-			Suggestions: m.zerolineSuggestions(),
-			SelectedIdx: m.suggestionIdx,
-			Picker:      m.zerolinePicker(),
-		})
-	}
-
 	rows := m.zerolineRows()
 	running := false
 	for _, r := range rows {
@@ -209,6 +192,8 @@ func (m model) zerolineView() string {
 		Spin:        m.frame,
 		JSONMode:    m.jsonMode,
 		Drawer:      m.drawerData(),
+		Chips:       zeroline.DefaultChips(), // shown only on the empty state (no rows)
+		ChipIndex:   -1,
 		Perm:        m.zerolinePerm(),
 		AskUser:     askUser,
 		Input:       m.input.View(),

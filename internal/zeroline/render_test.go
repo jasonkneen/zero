@@ -21,15 +21,15 @@ func TestThemesCount(t *testing.T) {
 	}
 }
 
-func TestRenderHomeAllThemes(t *testing.T) {
+func TestEmptyStateAllThemes(t *testing.T) {
 	for v := 0; v < len(Themes); v++ {
-		out := RenderHome(HomeData{
+		out := RenderChat(ChatData{
 			Variant: v, Dark: true, Width: 100, Height: 28,
 			Header: Header{Cwd: "~/src/zero", Branch: "main", Model: "claude-sonnet-4.5", Provider: "anthropic"},
-			Input:  "❯ message zero",
+			Chips:  DefaultChips(),
 		})
 		if !strings.Contains(stripANSI(out), "std-lib-first") {
-			t.Errorf("theme %d: home missing tagline", v)
+			t.Errorf("theme %d: empty state missing tagline", v)
 		}
 	}
 }

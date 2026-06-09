@@ -86,7 +86,7 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 			}
 			frame = zeroline.RenderChat(cd)
 		} else {
-			frame = zeroline.RenderHome(zeroline.HomeData{
+			frame = zeroline.RenderChat(zeroline.ChatData{
 				Variant: v, Dark: !*light, Width: *width, Height: *height, Header: hdr,
 				Input:     "describe a task for zero…",
 				Chips:     zeroline.DefaultChips(),

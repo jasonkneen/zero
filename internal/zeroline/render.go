@@ -62,25 +62,6 @@ type Picker struct {
 	Selected int
 }
 
-// HomeData drives the Zen home page.
-type HomeData struct {
-	Variant       int
-	Dark          bool
-	Width, Height int
-	Header        Header
-	Recent        [][3]string
-	Input         string
-	// Chips are the suggestion chips shown on the empty home (one task per row);
-	// ChipIndex is the highlighted chip (-1 = none).
-	Chips     []string
-	ChipIndex int
-	// Suggestions / SelectedIdx drive the slash-command autocomplete overlay; an
-	// empty slice means no overlay. Picker, when non-nil, is an open selector.
-	Suggestions []Suggestion
-	SelectedIdx int
-	Picker      *Picker
-}
-
 // Session is one row in the sessions drawer.
 type Session struct {
 	ID, When, Title, Model string
@@ -107,7 +88,11 @@ type ChatData struct {
 	Spin          int
 	JSONMode      bool    // render the run as syntax-colored JSON instead of the transcript
 	Drawer        *Drawer // when non-nil, the sessions slide-over is open over the body
-	Perm          *Perm
+	// Chips are the suggestion chips shown on the empty state (one per row);
+	// ChipIndex is the highlighted chip (-1 = none).
+	Chips     []string
+	ChipIndex int
+	Perm      *Perm
 	// AskUser, when non-nil, is a pending ask_user questionnaire. It renders the
 	// focused question (over the spinner) so the zeroline skin mirrors the default
 	// skin instead of showing a misleading "working…".
@@ -225,50 +210,52 @@ func (s styles) chipBox(label string, selected bool, w int) string {
 		Render(content)
 }
 
-// RenderHome renders the centered Zen landing surface: the ZERO wordmark, the
-// tagline + a model hint, and the suggestion chips.
-func RenderHome(d HomeData) string {
-	p := Resolve(d.Variant, d.Dark)
-	s := newCanvasStyles(p, d.Variant, d.Dark)
-	w := maxi(d.Width, 40)
+// zeroMark is the small "0" brand glyph centered in the empty state (the boot
+// splash uses the full ZERO wordmark instead).
+var zeroMark = []string{
+	"██████",
+	"██  ██",
+	"██  ██",
+	"██  ██",
+	"██████",
+}
 
-	var b strings.Builder
-	for _, l := range wordmark {
-		b.WriteString(s.acc.Render(l) + "\n")
+// emptyState renders the spec's empty state INSIDE the chat body (so the title
+// bar, status bar, and composer stay visible): the 0 mark + tagline + model hint
+// + suggestion chips, centered in the h-row body region.
+func (s styles) emptyState(d ChatData, w, h int) string {
+	var lines []string
+	for _, l := range zeroMark {
+		lines = append(lines, s.acc.Bold(true).Render(l))
 	}
-	b.WriteString("\n")
-	b.WriteString(s.mute.Render("a std-lib-first coding agent · bring your own key · no lock-in") + "\n")
-	b.WriteString(s.dim.Render("running ") + s.fg.Render("zero") + s.dim.Render(" against ") + s.fg.Render(orDash(d.Header.Model)) + "\n")
-
+	lines = append(lines, "",
+		s.mute.Render("a std-lib-first coding agent · bring your own key · no lock-in"),
+		s.dim.Render("running ")+s.fg.Render("zero")+s.dim.Render(" against ")+s.fg.Render(orDash(d.Header.Model)))
 	cw := mini(60, w-8)
-	if len(d.Chips) > 0 {
-		b.WriteString("\n")
-		for i, c := range d.Chips {
-			if i > 0 {
-				b.WriteString("\n") // 1-row gap between chips
-			}
-			b.WriteString(s.chipBox(c, i == d.ChipIndex, cw) + "\n")
+	for i, c := range d.Chips {
+		if i == 0 {
+			lines = append(lines, "")
 		}
+		lines = append(lines, strings.Split(s.chipBox(c, i == d.ChipIndex, cw), "\n")...)
 	}
-	b.WriteString("\n")
-
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.Line).
-		BorderBackground(p.Bg).Background(p.Bg).
-		Padding(0, 1).Width(cw - 2).Render(s.acc.Bold(true).Render("❯") + " " + d.Input)
-	b.WriteString(box + "\n")
-	homeOverlayCap := len(d.Suggestions) + 1
-	if d.Picker != nil {
-		homeOverlayCap = len(d.Picker.Items) + 1
+	// Center each line horizontally, then vertically center within EXACTLY h rows
+	// (cropping from the bottom if the content is taller than the body).
+	for i := range lines {
+		lines[i] = lipgloss.PlaceHorizontal(w, lipgloss.Center, lines[i])
 	}
-	if overlay := s.overlayRegion(ChatData{Suggestions: d.Suggestions, SelectedIdx: d.SelectedIdx, Picker: d.Picker}, cw, homeOverlayCap); overlay != "" {
-		b.WriteString(overlay + "\n")
+	if len(lines) > h {
+		lines = lines[:h]
 	}
-	b.WriteString("\n")
-	b.WriteString(s.mute.Render("⏎ start · 1-5 theme · ^L light · / commands · @ files · ! bash · ^C quit"))
-
-	content := lipgloss.NewStyle().Align(lipgloss.Center).Background(p.Bg).Render(b.String())
-	return lipgloss.Place(w, maxi(d.Height, 8), lipgloss.Center, lipgloss.Center, content,
-		lipgloss.WithWhitespaceBackground(p.Bg))
+	blank := strings.Repeat(" ", w)
+	out := make([]string, 0, h)
+	for i := 0; i < (h-len(lines))/2; i++ {
+		out = append(out, blank)
+	}
+	out = append(out, lines...)
+	for len(out) < h {
+		out = append(out, blank)
+	}
+	return strings.Join(out, "\n")
 }
 
 // ------------------------------------------------------------- CHAT (STATUS)
@@ -330,12 +317,15 @@ func RenderChat(d ChatData) string {
 		}
 		return s.transcript(d, w, bodyH)
 	}
+	emptyHome := len(d.Rows) == 0 && d.Stream == "" && d.AskUser == nil && !d.Working
 	var body string
 	switch {
 	case d.Perm != nil:
 		body = s.permModal(d.Perm, w, bodyH)
 	case d.Drawer != nil:
 		body = s.drawerOverlay(underBody(), d.Drawer, w, bodyH)
+	case emptyHome:
+		body = s.emptyState(d, w, bodyH)
 	default:
 		body = underBody()
 	}

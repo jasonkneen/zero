@@ -79,13 +79,13 @@ func TestPermissionLineColoredByOutcome(t *testing.T) {
 }
 
 func TestHomeChipsAreSeparateBorderedBoxes(t *testing.T) {
-	d := HomeData{
+	d := ChatData{
 		Variant: 0, Dark: true, Width: 100, Height: 34, Header: Header{Model: "m"},
 		Chips: []string{"alpha", "beta", "gamma"}, ChipIndex: 1,
 	}
-	out := RenderHome(d)
+	out := RenderChat(d)
 	if h := lipgloss.Height(out); h != 34 {
-		t.Fatalf("home height = %d, want 34 (frame-exact)", h)
+		t.Fatalf("empty-state height = %d, want 34 (frame-exact)", h)
 	}
 	for _, line := range strings.Split(out, "\n") {
 		if lipgloss.Width(line) > 100 {
