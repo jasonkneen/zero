@@ -59,7 +59,7 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 					{Kind: "final", Text: "Extracted tool dispatch into a ToolExecutor; loop.go now delegates. go test ./... is green."},
 					{Kind: "done", Text: "4 tools · 1,284 tok · $0.04", Status: "ok"},
 				},
-				Input: "❯ ",
+				Input: "add a test for the new ToolExecutor",
 			}
 			if *perm {
 				cd.Perm = &zeroline.Perm{Tool: "edit_file", Risk: "medium", Reason: "writes internal/agent/exec.go and loop.go", Summary: "write"}

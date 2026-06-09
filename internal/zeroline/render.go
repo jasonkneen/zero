@@ -612,24 +612,31 @@ func bar(left, right string, w int, fill lipgloss.Color) string {
 func (s styles) cmdRegion(d ChatData, w int) string {
 	p := s.pal
 	if d.Perm != nil {
-		var hint string
+		keys := s.acc.Render("a") + s.mute.Render("/") + s.acc.Render("A") + s.mute.Render("/") + s.acc.Render("d")
+		prefix := "keys "
 		if PermLayout(w, d.Height).Active {
-			hint = s.mute.Render("click a choice · keys ") +
-				s.acc.Render("a") + s.mute.Render("/") + s.acc.Render("y") + s.mute.Render("/") + s.acc.Render("d") +
-				s.mute.Render(" · Esc cancel")
-		} else {
-			hint = s.mute.Render("keys ") +
-				s.acc.Render("a") + s.mute.Render("/") + s.acc.Render("y") + s.mute.Render("/") + s.acc.Render("d") +
-				s.mute.Render(" · Esc cancel")
+			prefix = "click a choice · keys "
 		}
-		return padRight(hint, w, p.Bg)
+		return padRight(s.mute.Render(prefix)+keys+s.mute.Render(" · Esc cancel"), w, p.Bg)
 	}
-	line := s.acc.Bold(true).Render(":") + " " + d.Input
+	// Composer: accent ❯ prompt + input, with a right-side run/stop affordance —
+	// lime "run ↵" normally, red "■ stop" while the agent is working.
+	var btn string
+	if d.Working {
+		btn = lipgloss.NewStyle().Foreground(p.Red).Bold(true).Render("■ stop")
+	} else {
+		btn = lipgloss.NewStyle().Background(p.Accent).Foreground(p.Bg).Bold(true).Render(" run ↵ ")
+	}
+	line := s.acc.Bold(true).Render("❯") + " " + d.Input
+	gap := w - lipgloss.Width(line) - lipgloss.Width(btn)
+	if gap < 1 {
+		gap = 1
+	}
+	row := line + lipgloss.NewStyle().Background(p.Bg).Render(strings.Repeat(" ", gap)) + btn
 	if d.ImageChips != "" {
-		chips := s.mute.Render(d.ImageChips)
-		return padRight(chips, w, p.Bg) + "\n" + padRight(line, w, p.Bg)
+		return padRight(s.mute.Render(d.ImageChips), w, p.Bg) + "\n" + padRight(row, w, p.Bg)
 	}
-	return padRight(line, w, p.Bg)
+	return padRight(row, w, p.Bg)
 }
 
 // permModal renders the centered permission modal across the body region.

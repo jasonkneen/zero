@@ -102,6 +102,19 @@ func TestLongTokenReclipped(t *testing.T) {
 	}
 }
 
+func TestComposerRunStopAffordance(t *testing.T) {
+	idle := stripANSI(RenderChat(chatWith([]Row{{Kind: "user", Text: "hi"}})))
+	if !strings.Contains(idle, "run ↵") {
+		t.Errorf("idle composer should show 'run ↵', got: %q", idle)
+	}
+	d := chatWith([]Row{{Kind: "user", Text: "hi"}})
+	d.Working = true
+	working := stripANSI(RenderChat(d))
+	if !strings.Contains(working, "■ stop") || strings.Contains(working, "run ↵") {
+		t.Errorf("working composer should show '■ stop' not 'run ↵', got: %q", working)
+	}
+}
+
 func TestTranscriptFrameExact(t *testing.T) {
 	d := chatWith([]Row{
 		{Kind: "user", Text: "do the thing"},
