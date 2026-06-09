@@ -505,43 +505,52 @@ func PermLayout(width, height int) PermGeometry {
 	}
 }
 
+// topBar renders the ZERO title bar: the lime "0" brand mark + name, a model-menu
+// label, and the cwd on the left; the TEXT|JSON toggle indicator + git branch on
+// the right. The title bar is the window chrome (no outer frame is drawn). cwd is
+// hidden at tight widths. run is accepted for signature stability; the run mode
+// now lives in the status bar.
 func (s styles) topBar(run string, h Header, w int) string {
 	p := s.pal
-	var modeTxt string
-	var modeBg lipgloss.Color
-	switch run {
-	case "work":
-		modeTxt, modeBg = "⟳ WORKING", p.Amber
-	case "done":
-		modeTxt, modeBg = "✓ DONE", p.Green
-	case "blocked":
-		modeTxt, modeBg = "⚠ BLOCKED", p.Red
-	default:
-		modeTxt, modeBg = "NORMAL", p.Accent
-	}
-	mode := lipgloss.NewStyle().Background(modeBg).Foreground(p.Bg).Bold(true).Padding(0, 1).Render(modeTxt)
 	b1 := func(in string) string { return lipgloss.NewStyle().Background(p.Panel2).Padding(0, 1).Render(in) }
 	b2 := func(in string) string { return lipgloss.NewStyle().Background(p.Panel).Padding(0, 1).Render(in) }
 
+	mark := lipgloss.NewStyle().Background(p.Accent).Foreground(p.Bg).Bold(true).Render(" 0 ")
+	name := lipgloss.NewStyle().Background(p.Panel).Foreground(p.Fg).Bold(true).Render(" zero ")
+	model := b2(s.mute.Render("model ▾ ") + s.fg.Render(orDash(h.Model)))
+	left := mark + name + model
+	if w >= 80 && strings.TrimSpace(h.Cwd) != "" {
+		left += b2(s.dim.Render(shortPath(h.Cwd)))
+	}
+
+	seg := s.segToggle(true) // TEXT active by default; JSON toggle is wired in Phase 7.
 	dirty := ""
 	if h.Dirty {
 		dirty = s.amb.Render("✱")
 	}
 	branch := b1(s.fg.Render("⎇ "+orDash(h.Branch)) + dirty)
-	cwd := b2(s.dim.Render(shortPath(h.Cwd)))
-	model := b2(s.mute.Render("model ") + s.fg.Render(orDash(h.Model)))
-	prov := b2(s.mute.Render("prov ") + s.dim.Render(orDash(h.Provider)))
-	ctx := b2(s.mute.Render("ctx ") + s.fg.Render(strconv.Itoa(h.CtxPct)+"%"))
-	cost := b1(s.mute.Render("$ ") + s.fg.Render(fmt.Sprintf("%.2f", h.Cost)))
-
-	return bar(mode+branch+cwd+model, prov+ctx+cost, w, p.Panel)
+	return bar(left, seg+branch, w, p.Panel)
 }
 
+// segToggle renders the spec's segmented TEXT|JSON indicator; the active side is
+// filled with the accent, the inactive side is a muted panel.
+func (s styles) segToggle(textActive bool) string {
+	p := s.pal
+	on := lipgloss.NewStyle().Background(p.Accent).Foreground(p.Bg).Bold(true).Padding(0, 1)
+	off := lipgloss.NewStyle().Background(p.Panel2).Foreground(p.Mute).Padding(0, 1)
+	if textActive {
+		return on.Render("TEXT") + off.Render("JSON")
+	}
+	return off.Render("TEXT") + on.Render("JSON")
+}
+
+// botBar renders the ZERO status bar: an accent ● + run mode, then tok/s, tokens,
+// a context gauge, and cost; the active theme name + key hints sit on the right.
 func (s styles) botBar(run string, h Header, variant, tokS, w int) string {
 	p := s.pal
 	caution := run == "blocked"
 	stTxt := map[string]string{"work": "WORKING", "done": "DONE", "blocked": "BLOCKED", "normal": "READY"}[run]
-	dot := lipgloss.NewStyle().Background(p.Accent).Render(" ")
+	dot := s.acc.Render("●")
 	stStyle := s.fg
 	if caution {
 		stStyle = s.red.Bold(true)
@@ -549,16 +558,12 @@ func (s styles) botBar(run string, h Header, variant, tokS, w int) string {
 	b1 := func(in string) string { return lipgloss.NewStyle().Background(p.Panel2).Padding(0, 1).Render(in) }
 	b2 := func(in string) string { return lipgloss.NewStyle().Background(p.Panel).Padding(0, 1).Render(in) }
 
-	tps := s.green.Render("0")
-	if tokS > 0 {
-		tps = s.green.Render(strconv.Itoa(tokS))
-	}
-	left := b1(dot+" "+stStyle.Render(stTxt)) + b2(s.dim.Render("utf-8")) +
-		b2(s.mute.Render("tok/s ")+tps) +
-		b2(s.mute.Render("tok ")+s.fg.Render(humanTokens(h.TotalTokens)))
-	right := b2(s.mute.Render("ctx ")+s.gauge(float64(h.CtxPct)/100, 8)) +
-		b2(s.mute.Render(ThemeName(variant))) +
-		b1(s.mute.Render("1-5 theme · ^L light"))
+	left := b1(dot+" "+stStyle.Render(stTxt)) +
+		b2(s.mute.Render("tok/s ")+s.green.Render(strconv.Itoa(tokS))) +
+		b2(s.mute.Render("tok ")+s.fg.Render(humanTokens(h.TotalTokens))) +
+		b2(s.mute.Render("ctx ")+s.gauge(float64(h.CtxPct)/100, 8)) +
+		b2(s.mute.Render("$")+s.fg.Render(fmt.Sprintf("%.2f", h.Cost)))
+	right := b2(s.mute.Render(ThemeName(variant))) + b1(s.dim.Render("1-5 theme · ^L light"))
 	return bar(left, right, w, p.Panel)
 }
 
