@@ -940,6 +940,11 @@ func (s styles) toolCard(r Row, w, spin int) []string {
 			left += "  " + s.dim.Render(clip(t, budget))
 		}
 	}
+	// Clip the head so a long tool name/target (e.g. an MCP tool) can't push the
+	// row past cw and wrap the card head into extra rows.
+	if maxLeft := cw - lipgloss.Width(status) - 1; maxLeft > 0 && lipgloss.Width(left) > maxLeft {
+		left = clip(left, maxLeft)
+	}
 	content := padBetween(left, status, cw)
 	if !r.Running && strings.TrimSpace(r.Detail) != "" {
 		if body := s.toolBody(r, cw); len(body) > 0 {
@@ -976,9 +981,14 @@ func (s styles) diffBody(diff string, w int) []string {
 	delText := lipgloss.NewStyle().Foreground(lipgloss.Color("#f2c4c4"))
 	faintest := lipgloss.NewStyle().Foreground(s.pal.Faintest)
 	lines := strings.Split(strings.TrimRight(diff, "\n"), "\n")
+	isHeader := func(ln string) bool {
+		return strings.HasPrefix(ln, "+++ ") || strings.HasPrefix(ln, "--- ") || strings.HasPrefix(ln, "@@")
+	}
 	add, del := 0, 0
 	for _, ln := range lines {
 		switch {
+		case isHeader(ln):
+			// unified-diff file/hunk headers are not content changes
 		case strings.HasPrefix(ln, "+"):
 			add++
 		case strings.HasPrefix(ln, "-"):
@@ -991,15 +1001,13 @@ func (s styles) diffBody(diff string, w int) []string {
 			out = append(out, faintest.Render(fmt.Sprintf("     … %d more lines", len(lines)-i)))
 			break
 		}
-		sign, txt, raw := " ", s.mute, strings.TrimPrefix(ln, " ")
-		signCol := " "
+		txt, raw, signCol := s.mute, strings.TrimPrefix(ln, " "), " "
 		switch {
 		case strings.HasPrefix(ln, "+"):
-			sign, txt, raw, signCol = "+", addText, ln[1:], s.green.Render("+")
+			txt, raw, signCol = addText, ln[1:], s.green.Render("+")
 		case strings.HasPrefix(ln, "-"):
-			sign, txt, raw, signCol = "-", delText, ln[1:], s.red.Render("-")
+			txt, raw, signCol = delText, ln[1:], s.red.Render("-")
 		}
-		_ = sign
 		gut := faintest.Render(fmt.Sprintf("%4d", i+1)) + " " + signCol + " "
 		out = append(out, gut+txt.Render(clip(detab(raw), w-7)))
 	}

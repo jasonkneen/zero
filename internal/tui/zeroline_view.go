@@ -99,7 +99,7 @@ func (m model) zerolineView() string {
 	rows := m.zerolineRows()
 	running := false
 	for _, r := range rows {
-		if r.Kind == "toolcall" && r.Running {
+		if r.Kind == "tool" && r.Running {
 			running = true
 		}
 	}

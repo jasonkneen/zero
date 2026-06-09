@@ -123,6 +123,20 @@ func TestZerolinePermissionMouseClick(t *testing.T) {
 	}
 }
 
+func TestZerolineRunningToolSuppressesThinking(t *testing.T) {
+	m := newZerolineModel()
+	m.showSplash = false
+	m.pending = true
+	// A tool call with no matching result → a running card; the separate
+	// "thinking…" line must be suppressed (not stacked under the running card).
+	m.transcript = []transcriptRow{
+		{kind: rowToolCall, id: "t1", tool: "bash", text: "tool call: bash", detail: "go test ./..."},
+	}
+	if out := m.View(); strings.Contains(out, "thinking") {
+		t.Error("a running tool card should suppress the separate 'thinking' line")
+	}
+}
+
 func TestZerolineThemeKeys(t *testing.T) {
 	m := newZerolineModel()
 	// digit selects theme when input empty

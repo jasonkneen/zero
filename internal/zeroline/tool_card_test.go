@@ -72,6 +72,27 @@ func TestToolCardGrepTabsNoOverflow(t *testing.T) {
 	}
 }
 
+func TestToolCardLongNameNoHeadOverflow(t *testing.T) {
+	long := "mcp__some_very_long_server__some_very_long_tool_name_indeed"
+	d := chatWith([]Row{{Kind: "tool", Tool: long, Text: "and/a/long/target/path/to/some/file.go", Status: "ok", Detail: "x"}})
+	d.Width, d.Height = 70, 14
+	out := RenderChat(d)
+	for _, line := range strings.Split(out, "\n") {
+		if lipgloss.Width(line) > 70 {
+			t.Fatalf("long tool name overflows card head: %d (%q)", lipgloss.Width(line), stripANSI(line))
+		}
+	}
+}
+
+func TestDiffBodyStatSkipsHeaders(t *testing.T) {
+	s := newStyles(Resolve(0, true), 0, true)
+	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new"
+	out := stripANSI(strings.Join(s.diffBody(diff, 60), "\n"))
+	if !strings.Contains(out, "+1") || !strings.Contains(out, "-1") {
+		t.Fatalf("stat should be +1/-1 with diff headers excluded, got: %q", out)
+	}
+}
+
 func TestToolCardFrameExact(t *testing.T) {
 	d := chatWith([]Row{{Kind: "tool", Tool: "edit_file", Text: "f.go", Detail: "+x\n-y\n z", Status: "ok"}})
 	d.Width, d.Height = 100, 26
