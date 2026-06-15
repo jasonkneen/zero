@@ -276,7 +276,7 @@ func parseSearchResults(body []byte) ([]searchResult, error) {
 	convert := func(raw []rawResult) []searchResult {
 		out := make([]searchResult, 0, len(raw))
 		for _, item := range raw {
-			out = append(out, searchResult{Title: item.Title, URL: item.URL, Snippet: item.Snippet})
+			out = append(out, searchResult(item))
 		}
 		return out
 	}

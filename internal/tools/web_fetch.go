@@ -302,7 +302,7 @@ func webFetchRedirectPolicy(previous func(*http.Request, []*http.Request) error,
 			return fmt.Errorf("too many redirects: maximum is %d", webFetchRedirectLimit)
 		}
 		if err := validateParsedWebFetchURL(request.Context(), request.URL, resolver, gate); err != nil {
-			return fmt.Errorf("Unsafe redirect URL: %w", err)
+			return fmt.Errorf("unsafe redirect URL: %w", err)
 		}
 		if previous != nil {
 			return previous(request, via)
