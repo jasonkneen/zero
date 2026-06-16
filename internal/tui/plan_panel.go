@@ -19,15 +19,20 @@ const (
 	// planPanelMaxItems caps how many plan rows the widget lists before it
 	// summarizes the remainder.
 	planPanelMaxItems = 14
+	// planPanelReserveRows is how many bottom chat rows (newest content + the
+	// composer) the floating right column must never cover, so a tall column
+	// cannot bury the whole conversation on a short terminal.
+	planPanelReserveRows = 5
 	// planToolName is the tool whose call marks a run as having a plan.
 	planToolName = "update_plan"
 )
 
-// planPanelActive reports whether the floating plan widget should be drawn. It
-// shows ONLY while a run is in flight AND that run has actually produced a plan
-// (called update_plan) — so a trivial "hi" never shows a stale plan from an
-// earlier task, and the widget disappears the moment the run finishes.
-func (m model) planPanelActive() bool {
+// rightColumnBase is the shared visibility gate for the floating right column
+// (the Plan card stacked over the Code card). It shows ONLY in full-screen mode
+// while a run is in flight, and never steals so much width that the chat becomes
+// unreadable. The individual cards add their own "is there anything to show"
+// test on top (a live plan, a live edit) so a trivial "hi" shows nothing.
+func (m model) rightColumnBase() bool {
 	if !m.altScreen || m.height <= 0 || m.setup.visible || m.transcriptDetailed {
 		return false
 	}
@@ -37,7 +42,15 @@ func (m model) planPanelActive() bool {
 	if chatWidth(m.width)-planPanelWidth < planPanelMinChat {
 		return false // keep the chat readable on small terminals
 	}
-	return m.currentRunHasPlan()
+	return true
+}
+
+// planPanelActive reports whether the floating plan widget should be drawn. It
+// shows ONLY while a run is in flight AND that run has actually produced a plan
+// (called update_plan) — so a trivial "hi" never shows a stale plan from an
+// earlier task, and the widget disappears the moment the run finishes.
+func (m model) planPanelActive() bool {
+	return m.rightColumnBase() && m.currentRunHasPlan()
 }
 
 // chatAreaWidth is the chat content width. The plan widget FLOATS over the
@@ -217,15 +230,38 @@ func framePlanPanel(body []string) string {
 	return strings.Join(lines, "\n")
 }
 
-// composeWithPlanPanel floats the compact widget over the TOP-RIGHT corner of the
-// rendered chat: only the first len(widget) rows are overlaid, on their rightmost
+// renderRightColumn builds the floating right column for the active run: the
+// Plan card (when the run has a plan) stacked over the Code card (when the run
+// has edited a file). Returns "" when neither card has anything to show, which
+// is what keeps the column absent for trivial, non-planning, non-editing turns.
+func (m model) renderRightColumn() string {
+	if !m.rightColumnBase() {
+		return ""
+	}
+	cards := make([]string, 0, 2)
+	if m.currentRunHasPlan() {
+		cards = append(cards, m.renderPlanPanel())
+	}
+	if path, diff := m.currentEditDiff(); diff != "" {
+		cards = append(cards, m.renderCodeCard(path, diff))
+	}
+	if len(cards) == 0 {
+		return ""
+	}
+	return strings.Join(cards, "\n")
+}
+
+// composeWithPlanPanel floats the right column over the TOP-RIGHT corner of the
+// rendered chat: only the first len(column) rows are overlaid, on their rightmost
 // planPanelWidth columns, leaving the transcript full-width everywhere else. A
-// no-op when the widget is inactive.
+// no-op when the column is empty. (Name kept for the View() call site; it now
+// carries both the Plan card and the live Code card.)
 func (m model) composeWithPlanPanel(content string) string {
-	if !m.planPanelActive() {
+	column := m.renderRightColumn()
+	if column == "" {
 		return content
 	}
-	widget := strings.Split(m.renderPlanPanel(), "\n")
+	widget := strings.Split(column, "\n")
 	if len(widget) == 0 {
 		return content
 	}
@@ -235,7 +271,16 @@ func (m model) composeWithPlanPanel(content string) string {
 		return content
 	}
 	lines := strings.Split(content, "\n")
-	for index := 0; index < len(widget) && index < len(lines); index++ {
+	// The column floats over the OLDER (top) rows only: always leave the most
+	// recent chat lines and the composer visible at the bottom, so a tall column
+	// (long plan + long diff) can never bury the whole conversation.
+	overlayRows := len(widget)
+	if m.height > 0 {
+		if maxRows := m.height - planPanelReserveRows; overlayRows > maxRows {
+			overlayRows = maxRows
+		}
+	}
+	for index := 0; index < overlayRows && index < len(lines); index++ {
 		left := fitStyledLine(lines[index], leftWidth)
 		left += strings.Repeat(" ", maxInt(0, leftWidth-lipgloss.Width(left)))
 		lines[index] = left + widget[index]

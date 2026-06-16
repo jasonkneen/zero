@@ -122,6 +122,12 @@ func (m model) renderRowCacheKey(row transcriptRow, width int, rc rowContext, op
 		if m.pending && row.runID != 0 && row.runID == m.activeRunID {
 			stable = false
 		}
+	case rowToolResult:
+		// A diff card in the active run flips between full and collapsed as the
+		// live Code card turns on/off, so it must not be served stale.
+		if toolCardAlwaysExpands(row.tool) && m.pending && row.runID != 0 && row.runID == m.activeRunID {
+			stable = false
+		}
 	case rowPermission:
 		event := row.permission
 		if event != nil && event.ToolCallID != "" && event.Action == agent.PermissionActionPrompt &&
@@ -137,6 +143,7 @@ func (m model) renderRowCacheKey(row transcriptRow, width int, rc rowContext, op
 	appendRenderCacheField(&b, strconv.FormatBool(flush))
 	appendRenderCacheField(&b, strconv.Itoa(opts.bodyCap))
 	appendRenderCacheField(&b, opts.cwd)
+	appendRenderCacheField(&b, strconv.FormatBool(opts.compactEdit))
 	appendRenderCacheField(&b, strconv.Itoa(int(row.kind)))
 	appendRenderCacheField(&b, row.id)
 	appendRenderCacheField(&b, row.text)

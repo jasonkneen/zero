@@ -152,11 +152,14 @@ func (rc rowContext) skip(row transcriptRow) bool {
 }
 
 // cardRenderOptions carries per-render knobs for tool cards: the body-line cap
-// (small for the live region, generous for the permanent scrollback flush) and
-// the workspace root used to absolutize paths for OSC 8 file hyperlinks.
+// (small for the live region, generous for the permanent scrollback flush), the
+// workspace root used to absolutize paths for OSC 8 file hyperlinks, and whether
+// edit diffs should collapse to a one-line record because the live Code card is
+// already showing them (compactEdit; live region only, never the flush/detail).
 type cardRenderOptions struct {
-	bodyCap int
-	cwd     string
+	bodyCap     int
+	cwd         string
+	compactEdit bool
 }
 
 // flushCardBodyMaxLines is the body cap for cards flushed to scrollback. The
@@ -188,6 +191,13 @@ func (m model) renderRowMode(row transcriptRow, width int, rc rowContext, flush 
 	opts := cardRenderOptions{bodyCap: cardBodyMaxLines, cwd: m.cwd}
 	if flush {
 		opts.bodyCap = flushCardBodyMaxLines
+	}
+	// In the live full-screen region, while the Code card is showing the active
+	// run's diff, collapse inline edit cards to a one-line record so the diff is
+	// not duplicated in the chat. Never in the flush (scrollback) or detailed
+	// paths — those keep the full diff for review.
+	if !flush && m.codePanelActive() {
+		opts.compactEdit = true
 	}
 	if defaultRenderCache != nil {
 		if key, stable := m.renderRowCacheKey(row, width, rc, opts, flush); key != "" {
@@ -953,7 +963,7 @@ func renderToolResultCard(row transcriptRow, width int, rc rowContext, opts card
 	// scrollback clean. Skipped for: the uncapped detailed view (opts.bodyCap==0),
 	// diff tools whose body must stay reviewable, and short output.
 	collapsedFooter := ""
-	if opts.bodyCap > 0 && !toolCardAlwaysExpands(name) {
+	if opts.bodyCap > 0 && (!toolCardAlwaysExpands(name) || opts.compactEdit) {
 		collapsedFooter = collapsedToolFooter(row.detail)
 	}
 	if collapsedFooter != "" && !row.expanded {
