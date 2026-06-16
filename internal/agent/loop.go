@@ -147,11 +147,35 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 			}
 		}
 
-		collected := zeroruntime.CollectStreamWithOptions(ctx, stream, zeroruntime.CollectOptions{
+		collectOpts := zeroruntime.CollectOptions{
 			OnText:      options.OnText,
 			OnReasoning: options.OnReasoning,
 			OnUsage:     options.OnUsage,
-		})
+		}
+		collected := zeroruntime.CollectStreamWithOptions(ctx, stream, collectOpts)
+		// Transparently retry a transient network failure that produced NO output
+		// (TLS/dial timeout, connection reset, …): the request never reached the
+		// model, so re-sending it after a short backoff is safe and usually
+		// succeeds. A failure that already produced text/tool calls is NOT retried
+		// (it would duplicate output), and a cancellation or an HTTP/content error
+		// is left for the normal handling below.
+		for attempt := 1; attempt <= maxNetworkRetries &&
+			ctx.Err() == nil &&
+			collected.Error != "" && collected.Text == "" && len(collected.ToolCalls) == 0 &&
+			isTransientNetworkError(collected.Error); attempt++ {
+			if options.OnNetworkRetry != nil {
+				options.OnNetworkRetry(attempt, collected.Error)
+			}
+			if !sleepWithContext(ctx, networkRetryBackoff(attempt-1)) {
+				break // run cancelled during backoff
+			}
+			retryStream, retryErr := provider.StreamCompletion(ctx, request)
+			if retryErr != nil {
+				collected = zeroruntime.CollectedStream{Error: retryErr.Error()}
+				continue
+			}
+			collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, collectOpts)
+		}
 		if collected.Error != "" {
 			// REACTIVE compaction: the streamed error may also be a context
 			// limit (some providers surface it mid-stream). Compact and retry

@@ -195,6 +195,10 @@ type Options struct {
 	// budget of the request about to be sent, so a surface (TUI/CLI) can show
 	// context utilization. Opt-in like the other callbacks; nil is a no-op.
 	OnContext func(ContextBreakdown)
+	// OnNetworkRetry, when set, is called before each transparent retry of a
+	// transient network failure (TLS/dial timeout, connection reset) so a surface
+	// can show "retrying…". attempt is 1-based; reason is the (redacted) error.
+	OnNetworkRetry func(attempt int, reason string)
 	// ModelSwitcher, when set, lets a tool escalate the run to a stronger model
 	// mid-run: the loop calls it with the requested model id and, on success,
 	// swaps the active provider and updates Options.Model for the rest of the

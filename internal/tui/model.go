@@ -2689,6 +2689,16 @@ func (m model) runAgentWithOptions(runID int, runCtx context.Context, prompt str
 				onText(delta)
 			}
 		}
+		onNetworkRetry := options.OnNetworkRetry
+		options.OnNetworkRetry = func(attempt int, reason string) {
+			// Surface the transparent network retry so the backoff isn't a silent
+			// pause. Only the attempt number is shown (the reason is already
+			// redacted upstream, but the URL adds nothing useful here).
+			m.sendAgentRow(runID, transcriptRow{kind: rowSystem, text: fmt.Sprintf("network issue reaching the provider — retrying (attempt %d)…", attempt)})
+			if onNetworkRetry != nil {
+				onNetworkRetry(attempt, reason)
+			}
+		}
 		onPermissionRequest := options.OnPermissionRequest
 		options.OnPermissionRequest = func(ctx context.Context, request agent.PermissionRequest) (agent.PermissionDecision, error) {
 			if onPermissionRequest != nil {
