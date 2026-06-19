@@ -83,8 +83,14 @@ func Resolve(options ResolveOptions) (ResolvedConfig, error) {
 	if network := strings.TrimSpace(cfg.Sandbox.Network); network != "" {
 		switch sandbox.NetworkMode(network) {
 		case sandbox.NetworkAllow, sandbox.NetworkDeny:
+		case sandbox.NetworkScoped:
+			// Scoped with no allowlist would collapse to deny in the engine; reject
+			// it loudly so the operator isn't surprised by a silent downgrade.
+			if !hasNonEmptyDomain(cfg.Sandbox.NetworkAllowedDomains) {
+				return ResolvedConfig{}, fmt.Errorf("invalid sandbox.network %q: scoped requires a non-empty sandbox.networkAllowedDomains", network)
+			}
 		default:
-			return ResolvedConfig{}, fmt.Errorf("invalid sandbox.network %q: expected allow or deny", network)
+			return ResolvedConfig{}, fmt.Errorf("invalid sandbox.network %q: expected allow, deny, or scoped", network)
 		}
 	}
 	if mode := strings.TrimSpace(cfg.Notify.Mode); mode != "" {
@@ -171,6 +177,11 @@ func mergeConfig(dst *FileConfig, src FileConfig) {
 	if network := strings.TrimSpace(src.Sandbox.Network); network != "" {
 		dst.Sandbox.Network = network
 	}
+	// Scoped egress allow/deny lists are a GRANT, layered here (global user
+	// config) like AdditionalWriteRoots and likewise NOT taken from project
+	// config (see mergeProjectConfig).
+	dst.Sandbox.NetworkAllowedDomains = unionStrings(dst.Sandbox.NetworkAllowedDomains, src.Sandbox.NetworkAllowedDomains)
+	dst.Sandbox.NetworkDeniedDomains = unionStrings(dst.Sandbox.NetworkDeniedDomains, src.Sandbox.NetworkDeniedDomains)
 	dst.Sandbox.AdditionalWriteRoots = unionStrings(dst.Sandbox.AdditionalWriteRoots, src.Sandbox.AdditionalWriteRoots)
 	if src.Sandbox.BlockUnixSockets {
 		dst.Sandbox.BlockUnixSockets = true
@@ -211,10 +222,11 @@ func mergeProjectConfig(dst *FileConfig, src FileConfig) error {
 		mergeProvider(dst, provider)
 	}
 	mergeMCPConfig(&dst.MCP, src.MCP)
-	// Sandbox.AdditionalWriteRoots is intentionally NOT merged from project
-	// config: a cloned repo's .zero/config.json must not be able to grant
-	// itself write access outside the workspace. Global config and CLI flags
-	// are the only config sources for write roots.
+	// Sandbox.AdditionalWriteRoots and Sandbox.NetworkAllowedDomains/
+	// NetworkDeniedDomains are intentionally NOT merged from project config: a
+	// cloned repo's .zero/config.json must not be able to grant itself write
+	// access outside the workspace, nor widen its own network egress allowlist.
+	// Global config (and CLI flags) are the only sources for those grants.
 	if maxAutonomy := strings.TrimSpace(src.Sandbox.MaxAutonomy); maxAutonomy != "" {
 		dst.Sandbox.MaxAutonomy = maxAutonomy
 	}
@@ -631,6 +643,18 @@ func hasProviderFields(profile ProviderProfile) bool {
 // base, preserving order. Used for additive config keys like
 // sandbox.additionalWriteRoots where a later layer must not erase earlier
 // grants.
+// hasNonEmptyDomain reports whether domains contains at least one entry that is
+// non-empty after trimming — used to reject a scoped network policy that has no
+// usable allowlist.
+func hasNonEmptyDomain(domains []string) bool {
+	for _, domain := range domains {
+		if strings.TrimSpace(domain) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func unionStrings(base []string, extra []string) []string {
 	seen := make(map[string]struct{}, len(base))
 	for _, value := range base {

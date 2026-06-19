@@ -121,8 +121,14 @@ func windowsSandboxSetupCheck(goos string, backend sandbox.Backend, workspaceRoo
 func doctorSandboxPolicy(cfg config.SandboxConfig) sandbox.Policy {
 	policy := sandbox.DefaultPolicy()
 	switch sandbox.NetworkMode(cfg.Network) {
-	case sandbox.NetworkAllow, sandbox.NetworkDeny:
+	case sandbox.NetworkAllow, sandbox.NetworkDeny, sandbox.NetworkScoped:
 		policy.Network = sandbox.NetworkMode(cfg.Network)
+	}
+	if len(cfg.NetworkAllowedDomains) > 0 {
+		policy.AllowedDomains = append([]string(nil), cfg.NetworkAllowedDomains...)
+	}
+	if len(cfg.NetworkDeniedDomains) > 0 {
+		policy.DeniedDomains = append([]string(nil), cfg.NetworkDeniedDomains...)
 	}
 	policy.MonitorDenials = cfg.MonitorDenials
 	return policy

@@ -724,9 +724,18 @@ func applyConfiguredSandboxPolicy(policy sandbox.Policy, cfg config.SandboxConfi
 	policy = applyConfiguredAutonomyCeiling(policy, cfg.MaxAutonomy)
 	if network := strings.TrimSpace(cfg.Network); network != "" {
 		switch sandbox.NetworkMode(network) {
-		case sandbox.NetworkAllow, sandbox.NetworkDeny:
+		case sandbox.NetworkAllow, sandbox.NetworkDeny, sandbox.NetworkScoped:
 			policy.Network = sandbox.NetworkMode(network)
 		}
+	}
+	// Scoped egress allow/deny lists from (global) config; the engine consults
+	// these only under NetworkScoped and falls closed to deny on an empty
+	// allowlist or a backend that can't enforce scoping.
+	if len(cfg.NetworkAllowedDomains) > 0 {
+		policy.AllowedDomains = append([]string(nil), cfg.NetworkAllowedDomains...)
+	}
+	if len(cfg.NetworkDeniedDomains) > 0 {
+		policy.DeniedDomains = append([]string(nil), cfg.NetworkDeniedDomains...)
 	}
 	// Opt-in hardening/diagnostic flags: only ever turn a feature ON from
 	// config, never off, so a programmatic default can't be silently disabled by

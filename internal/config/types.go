@@ -59,10 +59,22 @@ func HasProviderProfile(profile ProviderProfile) bool {
 type SandboxConfig struct {
 	MaxAutonomy string `json:"maxAutonomy,omitempty"`
 	// Network controls whether shell commands classified as network-touching
-	// (curl, git push, package installs, …) are allowed: "allow" or "deny".
-	// Empty keeps the built-in default (deny). Without this knob the engine's
-	// hard-coded NetworkDeny was unreachable from any config surface.
+	// (curl, git push, package installs, …) are allowed: "allow", "deny", or
+	// "scoped". Empty keeps the built-in default (deny). "scoped" permits egress
+	// only to NetworkAllowedDomains (minus NetworkDeniedDomains) and REQUIRES a
+	// non-empty NetworkAllowedDomains; it falls closed to "deny" on a backend that
+	// cannot enforce scoped egress.
 	Network string `json:"network,omitempty"`
+	// NetworkAllowedDomains is the egress allowlist consulted only when Network is
+	// "scoped": the sandboxed process may reach only these domains (minus
+	// NetworkDeniedDomains) and nothing else. Ignored for "allow"/"deny". Like
+	// AdditionalWriteRoots this is a GRANT, so it is honored from the GLOBAL user
+	// config only — never project config — so a cloned repo cannot widen its own
+	// network egress.
+	NetworkAllowedDomains []string `json:"networkAllowedDomains,omitempty"`
+	// NetworkDeniedDomains subtracts from NetworkAllowedDomains under "scoped".
+	// Global-user-config only, for the same reason as NetworkAllowedDomains.
+	NetworkDeniedDomains []string `json:"networkDeniedDomains,omitempty"`
 	// AdditionalWriteRoots lists directories outside the workspace the sandbox
 	// allows writes in. Each entry must be an existing directory; entries are
 	// normalized (~-expanded, absolutized, symlink-resolved) at startup and an
