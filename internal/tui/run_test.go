@@ -36,8 +36,8 @@ func TestRunRejectsNonTTYStdin(t *testing.T) {
 
 	select {
 	case code := <-done:
-		if code == 0 {
-			t.Fatalf("Run with non-TTY stdin returned 0; want a non-zero exit, not a hang")
+		if code != 2 {
+			t.Fatalf("Run with non-TTY stdin returned %d; want exit code 2 from the stdin TTY guard", code)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run blocked on non-TTY stdin instead of failing fast")

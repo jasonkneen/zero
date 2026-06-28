@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/term"
 )
 
 // Run starts the Zero Bubble Tea shell and returns a process-style exit code.
@@ -14,9 +15,10 @@ func Run(ctx context.Context, options Options) int {
 	// The interactive shell needs a real terminal on stdin: with piped or
 	// redirected input Bubble Tea blocks forever waiting for events that never
 	// arrive (e.g. `echo "" | zero`). Fail fast with guidance toward the headless
-	// path instead of hanging. A pipe/file has ModeCharDevice unset; a TTY (incl.
-	// the Windows console) has it set.
-	if stat, err := os.Stdin.Stat(); err == nil && stat.Mode()&os.ModeCharDevice == 0 {
+	// path instead of hanging. term.IsTerminal is a true TTY check (it rejects
+	// pipes, regular files, and non-terminal char devices like /dev/null) and
+	// fails closed — anything that is not a verified terminal blocks the shell.
+	if !term.IsTerminal(os.Stdin.Fd()) {
 		fmt.Fprintln(os.Stderr, "zero: the interactive shell needs a terminal (stdin is not a TTY). For non-interactive use, run: zero exec \"<prompt>\"")
 		return 2
 	}
