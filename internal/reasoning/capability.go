@@ -8,6 +8,13 @@
 // consults to decide which reasoning tiers a model actually supports, replacing
 // model-name guessing. This package depends only on the standard library, so the
 // model registry and provider adapters can import it without a cycle.
+//
+// Source of truth: this catalog is intended to become the authoritative reasoning
+// -capability source. When it is wired into the live path, modelregistry's
+// name-pattern inference (reasoningEffortsForModelName) is demoted to a fallback
+// for models the catalog does not cover; the catalog wins where it has an entry.
+// This commit is additive groundwork — nothing consumes it yet — so there is no
+// behavioral divergence until that wiring lands.
 package reasoning
 
 import "strings"
@@ -82,11 +89,13 @@ func (c Capability) clone() Capability {
 // Supported reports whether the model performs any reasoning.
 func (c Capability) Supported() bool { return c.Reasoning }
 
-// EffortControl returns the model's effort control and whether it has one.
+// EffortControl returns the model's effort control and whether it has one. The
+// returned Control is a deep copy, so a caller cannot mutate the shared catalog
+// through its Values slice.
 func (c Capability) EffortControl() (Control, bool) {
 	for _, ctrl := range c.Controls {
 		if ctrl.Kind == ControlEffort {
-			return ctrl, true
+			return ctrl.clone(), true
 		}
 	}
 	return Control{}, false
@@ -115,12 +124,13 @@ func (c Capability) SupportsEffort(tier string) bool {
 }
 
 // BudgetControl returns the model's token-budget control and whether it has one.
-// The returned Control's Min/Max are nil when that bound is unspecified (a real
-// 0, e.g. Gemini's min: 0, is reported as a non-nil pointer to 0).
+// The returned Control is a deep copy: its Min/Max are independent pointers, so a
+// caller cannot mutate the shared catalog through them. Min/Max are nil when that
+// bound is unspecified (a real 0, e.g. Gemini's min: 0, is a non-nil pointer to 0).
 func (c Capability) BudgetControl() (Control, bool) {
 	for _, ctrl := range c.Controls {
 		if ctrl.Kind == ControlBudget {
-			return ctrl, true
+			return ctrl.clone(), true
 		}
 	}
 	return Control{}, false

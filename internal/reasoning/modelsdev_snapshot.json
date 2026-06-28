@@ -1,6 +1,7 @@
 {
  "_source": "models.dev/api.json",
- "_note": "Trimmed snapshot: per-provider apiModel -> reasoning capability. First-party providers only.",
+ "_fetched": "2026-06-28",
+ "_note": "Trimmed snapshot: per-provider apiModel -> {reasoning, reasoning_options}. First-party providers only (anthropic, openai, google, xai, groq, deepseek); routers excluded. See internal/reasoning/catalog.go for the regeneration recipe.",
  "providers": {
   "anthropic": {
    "claude-opus-4-5": {

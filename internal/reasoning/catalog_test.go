@@ -37,31 +37,31 @@ func TestGroundTruthOpenAI(t *testing.T) {
 		{"o3", true, ControlEffort, []string{"low", "medium", "high"}},
 	}
 	for _, tc := range cases {
-		cap, ok := c.Lookup("openai", tc.api)
+		entry, ok := c.Lookup("openai", tc.api)
 		if !ok {
 			t.Errorf("%s: not found", tc.api)
 			continue
 		}
-		if cap.Supported() != tc.reason {
-			t.Errorf("%s: Supported=%v want %v", tc.api, cap.Supported(), tc.reason)
+		if entry.Supported() != tc.reason {
+			t.Errorf("%s: Supported=%v want %v", tc.api, entry.Supported(), tc.reason)
 		}
-		if !equalStrings(cap.EffortValues(), tc.values) {
-			t.Errorf("%s: efforts=%v want %v", tc.api, cap.EffortValues(), tc.values)
+		if !equalStrings(entry.EffortValues(), tc.values) {
+			t.Errorf("%s: efforts=%v want %v", tc.api, entry.EffortValues(), tc.values)
 		}
 	}
 
 	// Non-reasoning models report reasoning:false and expose no effort.
 	for _, api := range []string{"gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4-turbo"} {
-		cap, ok := c.Lookup("openai", api)
+		entry, ok := c.Lookup("openai", api)
 		if !ok {
 			t.Errorf("%s: not found", api)
 			continue
 		}
-		if cap.Supported() {
+		if entry.Supported() {
 			t.Errorf("%s: Supported=true, want false (non-reasoning)", api)
 		}
-		if cap.EffortValues() != nil {
-			t.Errorf("%s: efforts=%v, want nil", api, cap.EffortValues())
+		if entry.EffortValues() != nil {
+			t.Errorf("%s: efforts=%v, want nil", api, entry.EffortValues())
 		}
 	}
 
@@ -84,12 +84,12 @@ func TestGroundTruthAnthropic(t *testing.T) {
 	for _, api := range []string{
 		"claude-opus-4-1-20250805", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
 	} {
-		cap, ok := c.Lookup("anthropic", api)
+		entry, ok := c.Lookup("anthropic", api)
 		if !ok {
 			t.Errorf("%s: not found", api)
 			continue
 		}
-		ctrl, ok := cap.BudgetControl()
+		ctrl, ok := entry.BudgetControl()
 		if !ok {
 			t.Errorf("%s: expected a budget control", api)
 			continue
@@ -100,7 +100,7 @@ func TestGroundTruthAnthropic(t *testing.T) {
 		if ctrl.Max != nil {
 			t.Errorf("%s: budget Max=%d, want nil (unbounded)", api, *ctrl.Max)
 		}
-		if _, ok := cap.EffortControl(); ok {
+		if _, ok := entry.EffortControl(); ok {
 			t.Errorf("%s: did not expect an effort control", api)
 		}
 	}
@@ -169,16 +169,16 @@ func TestCoversZeroShippedReasoningModels(t *testing.T) {
 		{"google", "gemini-2.5-flash-lite", ControlToggle},
 	}
 	for _, m := range shipped {
-		cap, ok := c.Lookup(m.provider, m.api)
+		entry, ok := c.Lookup(m.provider, m.api)
 		if !ok {
 			t.Errorf("%s/%s: not covered by the snapshot", m.provider, m.api)
 			continue
 		}
-		if !cap.Supported() {
+		if !entry.Supported() {
 			t.Errorf("%s/%s: Supported=false, want a reasoning model", m.provider, m.api)
 		}
-		if !cap.HasControl(m.wantKind) {
-			t.Errorf("%s/%s: missing expected control %q (controls=%+v)", m.provider, m.api, m.wantKind, cap.Controls)
+		if !entry.HasControl(m.wantKind) {
+			t.Errorf("%s/%s: missing expected control %q (controls=%+v)", m.provider, m.api, m.wantKind, entry.Controls)
 		}
 	}
 }
@@ -197,6 +197,29 @@ func TestLookupReturnsDeepCopy(t *testing.T) {
 	second, _ := c.Lookup("openai", "gpt-5")
 	if second.Controls[0].Values[0] == "MUTATED" || second.Controls[0].Kind == "MUTATED" {
 		t.Error("Lookup leaked a shared reference; a caller's mutation reached the catalog")
+	}
+}
+
+// TestAccessorsReturnDeepCopies pins that EffortControl/BudgetControl hand back
+// independent copies, so a caller holding a Capability that shares state with the
+// catalog cannot corrupt it by mutating an accessor result's slice or pointers.
+func TestAccessorsReturnDeepCopies(t *testing.T) {
+	min := 100
+	c := Capability{Reasoning: true, Controls: []Control{
+		{Kind: ControlEffort, Values: []string{"low", "high"}},
+		{Kind: ControlBudget, Min: &min},
+	}}
+
+	eff, _ := c.EffortControl()
+	eff.Values[0] = "MUTATED"
+	if c.Controls[0].Values[0] != "low" {
+		t.Error("EffortControl leaked the Values slice")
+	}
+
+	bud, _ := c.BudgetControl()
+	*bud.Min = 999
+	if *c.Controls[1].Min != 100 {
+		t.Error("BudgetControl leaked the Min pointer")
 	}
 }
 

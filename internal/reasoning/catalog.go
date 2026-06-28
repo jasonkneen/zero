@@ -12,7 +12,12 @@ import (
 // reasoning capability (the `reasoning` flag and `reasoning_options`). Routers
 // (OpenRouter/Azure/etc.) are intentionally excluded — they carry generic or
 // stale option lists, so a lookup resolves to the first-party provider instead.
-// Refresh by re-trimming api.json; runtime refresh is a separate change.
+//
+// Provenance is recorded in the snapshot's `_source`/`_fetched` header fields.
+// To regenerate: fetch api.json, then for each provider in
+// {anthropic, openai, google, xai, groq, deepseek} keep `{reasoning,
+// reasoning_options}` per api id, and bump `_fetched`. Runtime auto-refresh is a
+// separate change.
 //
 //go:embed modelsdev_snapshot.json
 var snapshotBytes []byte
@@ -56,9 +61,12 @@ func mustParseEmbedded() Catalog {
 func Embedded() Catalog { return embedded }
 
 // Lookup returns the reasoning capability for a model identified by its Zero
-// provider kind and api model id (the provider's wire name). The match is exact
-// on the api model id; ok is false when the provider or model is not in the
-// snapshot, in which case the caller falls back to its next capability source.
+// provider kind and the API model id — the provider's wire name (e.g.
+// "claude-opus-4-1-20250805"), NOT the friendly registry id ("claude-opus-4.1").
+// The match is exact: the api model id is only trimmed, not case-folded, and no
+// router prefixes ("openai/…") or suffixes (":cloud") are stripped. ok is false
+// when the provider or model is not in the snapshot, in which case the caller
+// falls back to its next capability source.
 func (c Catalog) Lookup(provider, apiModel string) (Capability, bool) {
 	apiModel = strings.TrimSpace(apiModel)
 	if apiModel == "" {
@@ -69,10 +77,10 @@ func (c Catalog) Lookup(provider, apiModel string) (Capability, bool) {
 		if !ok {
 			continue
 		}
-		if cap, ok := models[apiModel]; ok {
+		if entry, ok := models[apiModel]; ok {
 			// Deep copy so callers cannot mutate the shared catalog through the
 			// returned Controls / Values slices or budget pointers.
-			return cap.clone(), true
+			return entry.clone(), true
 		}
 	}
 	return Capability{}, false
