@@ -204,7 +204,11 @@ type ChildRunResult struct {
 	Events   []streamjson.Event
 	Stderr   string
 	ExitCode int
-	Started  bool
+	// Signal is a human-readable description (e.g. "signal: killed") when the child
+	// was terminated by a signal rather than exiting normally; empty otherwise. It
+	// turns an opaque exit -1 into an actionable reason (SIGKILL ~ out of memory).
+	Signal  string
+	Started bool
 }
 
 func (executor Executor) Run(ctx context.Context, params TaskParameters, options TaskRunOptions) (ExecResult, error) {
@@ -572,7 +576,7 @@ func (executor Executor) runBuiltArgs(ctx context.Context, built BuildArgsResult
 	rolledUp := executor.rollUpSpecialistUsage(accounting, summary)
 	executor.recordSpecialistStop(accounting, summary, summary.Status, summary.ExitCode, nil, rolledUp)
 	return ExecResult{
-		Result:    BuildFinalResult(run.Events, run.Stderr, run.ExitCode),
+		Result:    BuildFinalResult(run.Events, run.Stderr, run.ExitCode, run.Signal),
 		SessionID: built.SessionID,
 	}, nil
 }
@@ -802,15 +806,22 @@ func runChildProcess(ctx context.Context, binaryPath string, args []string, prog
 	}
 	exitCode := 0
 	started := true
+	signalDesc := ""
 	if err := command.Wait(); err != nil {
 		var exitErr *osexec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
+			if exitCode < 0 && exitErr.ProcessState != nil {
+				// ExitCode() is -1 when the child was terminated by a signal rather
+				// than exiting. ProcessState.String() is the portable description
+				// (e.g. "signal: killed") — capture it so the failure isn't opaque.
+				signalDesc = exitErr.ProcessState.String()
+			}
 		} else {
 			return ChildRunResult{Events: events, Stderr: stderr.String(), ExitCode: -1, Started: started}, fmt.Errorf("run specialist child: %w", err)
 		}
 	}
-	return ChildRunResult{Events: events, Stderr: stderr.String(), ExitCode: exitCode, Started: started}, nil
+	return ChildRunResult{Events: events, Stderr: stderr.String(), ExitCode: exitCode, Signal: signalDesc, Started: started}, nil
 }
 
 func (run ChildRunResult) exitCodeOr(defaultExitCode int) int {

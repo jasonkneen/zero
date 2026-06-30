@@ -134,10 +134,15 @@ func SummarizeStream(events []streamjson.Event, processExitCode int) StreamResul
 	return result
 }
 
-func BuildFinalResult(events []streamjson.Event, stderrOutput string, processExitCode int) tools.Result {
+func BuildFinalResult(events []streamjson.Event, stderrOutput string, processExitCode int, signalDesc string) tools.Result {
 	summary := SummarizeStream(events, processExitCode)
 	hasErrors := len(summary.Errors) > 0 || summary.ExitCode != 0
 	if summary.Status != "" && summary.Status != "success" && summary.Status != "ok" {
+		hasErrors = true
+	}
+	// A captured kill signal must always surface, even if a late run_end reported a
+	// clean exit just before the child was killed during teardown.
+	if strings.TrimSpace(signalDesc) != "" {
 		hasErrors = true
 	}
 	if !hasErrors {
@@ -149,7 +154,15 @@ func BuildFinalResult(events []streamjson.Event, stderrOutput string, processExi
 	}
 
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "Subagent failed (exit %d)\n", summary.ExitCode)
+	if signal := strings.TrimSpace(signalDesc); signal != "" {
+		// The child was terminated by a signal (exit code -1). Surface the cause
+		// instead of an opaque "exit -1". A SIGKILL has several common causes, so
+		// list them rather than asserting OOM — a timeout or user cancellation lands
+		// on this branch too — while still calling out the actionable one.
+		fmt.Fprintf(&builder, "Subagent terminated by a signal (%s) — killed before it finished. Likely causes: the OS out-of-memory killer (common when many sub-agents run in parallel — try fewer), a timeout, or cancellation.\n", signal)
+	} else {
+		fmt.Fprintf(&builder, "Subagent failed (exit %d)\n", summary.ExitCode)
+	}
 	if len(summary.Errors) > 0 {
 		fmt.Fprintf(&builder, "errors: %s\n", strings.Join(summary.Errors, "; "))
 	}
