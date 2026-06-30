@@ -439,11 +439,16 @@ const ActiveProviderEnv = "ZERO_PROVIDER"
 // provider profile — and therefore the same credentials (env key / stored key /
 // OAuth) — as its parent. Without this a sub-agent re-resolves config.json's
 // default provider and can land on one whose credentials don't match the parent's
-// live selection, failing auth the instant it spawns. No-op for an empty name.
+// live selection, failing auth the instant it spawns. A blank name CLEARS the
+// variable: switching back to an unnamed/default profile must not keep exporting a
+// stale provider to children.
 func SetActiveProviderEnv(name string) {
-	if strings.TrimSpace(name) != "" {
-		_ = os.Setenv(ActiveProviderEnv, name)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		_ = os.Unsetenv(ActiveProviderEnv)
+		return
 	}
+	_ = os.Setenv(ActiveProviderEnv, name)
 }
 
 func applyEnv(cfg *FileConfig, env map[string]string) {
