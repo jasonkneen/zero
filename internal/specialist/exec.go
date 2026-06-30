@@ -577,6 +577,21 @@ func (executor Executor) runBuiltArgs(ctx context.Context, built BuildArgsResult
 	}, nil
 }
 
+// availableSpecialistList renders the registered specialist names for a corrective
+// "not found" error, so a model that guessed a wrong name learns the real options.
+func availableSpecialistList(result LoadResult) string {
+	names := make([]string, 0, len(result.Specialists))
+	for _, manifest := range result.Specialists {
+		if n := strings.TrimSpace(manifest.Metadata.Name); n != "" {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return "(none registered)"
+	}
+	return strings.Join(names, ", ")
+}
+
 func (executor Executor) loadManifest(name string) (Manifest, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -592,7 +607,11 @@ func (executor Executor) loadManifest(name string) (Manifest, error) {
 	}
 	manifest, ok := Find(result, name)
 	if !ok {
-		return Manifest{}, fmt.Errorf("specialist %q not found", name)
+		// Corrective error: a model that invents a specialist name (e.g.
+		// "validator-runner", "file-writer") otherwise gets an opaque "not found"
+		// and keeps retrying made-up names. List the real ones so it self-corrects
+		// to a capable specialist instead of spawning doomed sub-agents.
+		return Manifest{}, fmt.Errorf("specialist %q not found. Available: %s. Use 'worker' for tasks that need to run shell commands or edit files; 'explorer'/'code-review' are read-only", name, availableSpecialistList(result))
 	}
 	return manifest, nil
 }

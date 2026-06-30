@@ -42,4 +42,15 @@ func TestSetMaxTurnsEnvRoundTrips(t *testing.T) {
 	if cfg2.MaxTurns != defaultMaxTurns {
 		t.Fatalf("garbage env clobbered MaxTurns to %d, want default %d", cfg2.MaxTurns, defaultMaxTurns)
 	}
+
+	// An over-ceiling env value (e.g. a raw shell export that bypasses the /turns
+	// clamp) must be clamped to MaxTurnsCeiling at the read site.
+	if err := os.Setenv(MaxTurnsEnv, "999999"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	cfg3 := &FileConfig{MaxTurns: defaultMaxTurns}
+	applyEnv(cfg3, nil)
+	if cfg3.MaxTurns != MaxTurnsCeiling {
+		t.Fatalf("applyEnv MaxTurns = %d, want clamped to ceiling %d", cfg3.MaxTurns, MaxTurnsCeiling)
+	}
 }
