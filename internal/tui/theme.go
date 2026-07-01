@@ -129,15 +129,21 @@ type palette struct {
 // lime accent. bg (#070708) is the terminal's own canvas — deliberately never
 // painted — so no token references it.
 var darkPalette = palette{
-	panel:     "#0e0e10",
-	promptBg:  "#262626",
-	line:      "#242429",
-	line2:     "#414147",
-	ink:       "#ececee",
-	muted:     "#9a9aa2", // secondary text — lifted so it clearly out-ranks faint
-	faint:     "#8a8a92", // hints/metadata — nudged up to separate from faintest
-	faintest:  "#7c7c82", // line numbers/separators — pinned at the WCAG-AA floor on the dark panel
-	accent:    "#caff3f",
+	panel:    "#0e0e10",
+	promptBg: "#262626",
+	line:     "#242429",
+	line2:    "#414147",
+	ink:      "#ececee",
+	muted:    "#9a9aa2", // secondary text — lifted so it clearly out-ranks faint
+	faint:    "#8a8a92", // hints/metadata — nudged up to separate from faintest
+	faintest: "#7c7c82", // line numbers/separators — pinned at the WCAG-AA floor on the dark panel
+	// Brand lime, softened from the original #caff3f (L 62%, S 100% — fully
+	// saturated, which read as glaring/neon everywhere it filled a block or
+	// bold-text surface: the composer prompt glyph, the permission popup's
+	// focused-option badge, the text-selection highlight). Pulled to L 50%,
+	// S 80%; still clearly lime, contrast vs both black (onAccent) and the
+	// near-black panel stays far above WCAG AA (~14:1 and ~13:1).
+	accent:    "#ade619",
 	green:     "#5dd1a4",
 	red:       "#ff7a7a",
 	amber:     "#ffc25c",
