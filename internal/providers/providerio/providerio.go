@@ -26,9 +26,9 @@ var ErrStreamIdle = errors.New("idle timeout (upstream stopped sending data)")
 
 // ErrStreamStalled reports that a streaming upstream kept the connection alive
 // (SSE keep-alives reset the idle watchdog, so it never fired) but produced no
-// actual output for StreamContentStallFactor × the idle timeout. Without this an
-// upstream that heartbeats-but-stalls — observed on chatgpt/gpt-5.x and ollama
-// reasoning models — would hang the agent indefinitely.
+// actual output for ContentStallTimeout(idle). Without this an upstream that
+// heartbeats-but-stalls — observed on chatgpt/gpt-5.x and ollama reasoning
+// models — would hang the agent indefinitely.
 var ErrStreamStalled = errors.New("stream stalled (upstream kept the connection alive but produced no output)")
 
 // StreamTimeoutMessage returns the human-readable detail for a stream-timeout
@@ -39,7 +39,7 @@ var ErrStreamStalled = errors.New("stream stalled (upstream kept the connection 
 // stuck or very slow.
 func StreamTimeoutMessage(err error, idleTimeout time.Duration) string {
 	if errors.Is(err, ErrStreamStalled) {
-		return fmt.Sprintf("no output for %s (the model kept the connection alive but produced nothing — it may be stuck; try a faster model or lower reasoning effort)", idleTimeout*StreamContentStallFactor)
+		return fmt.Sprintf("no output for %s (the model kept the connection alive but produced nothing — it may be stuck; try a faster model or lower reasoning effort)", ContentStallTimeout(idleTimeout))
 	}
 	return fmt.Sprintf("idle timeout after %s (upstream stopped sending data)", idleTimeout)
 }
@@ -54,13 +54,22 @@ func StreamTimeoutMessage(err error, idleTimeout time.Duration) string {
 // Override globally with ZERO_STREAM_IDLE_TIMEOUT.
 const DefaultStreamIdleTimeout = 5 * time.Minute
 
-// StreamContentStallFactor bounds a heartbeat-but-no-output stream. Keep-alives
-// reset the idle watchdog (a heartbeating upstream is not "dead"), but if NO real
-// data line arrives for StreamContentStallFactor × the idle timeout, the stream is
-// treated as stalled and aborted (ErrStreamStalled). It is > 1 so a slow-but-
-// producing request — one that emits data between heartbeats — is never killed; the
-// content watchdog only catches a stream that heartbeats while producing nothing.
-const StreamContentStallFactor = 2
+// ContentStallTimeout bounds a heartbeat-but-no-output stream: keep-alives reset
+// the idle watchdog (a heartbeating upstream is not "dead"), but if NO real data
+// line arrives for this long the stream is aborted (ErrStreamStalled). Scaled
+// above idleTimeout (so a slow-but-producing request that emits data between
+// heartbeats is never killed — the watchdog only ever fires when NOTHING real
+// arrives), but only 1.2× rather than the old 2×: a genuine heartbeat-pause
+// stall on chatgpt/gpt-5.x rarely recovers, so a ~10-minute dead wait (at the 5m
+// idle default) was a terrible UX for a doomed turn. At the default idle this is
+// 6 minutes; it still scales with ZERO_STREAM_IDLE_TIMEOUT. A returned value <= 0
+// (idle watchdog disabled) leaves the content watchdog off too.
+func ContentStallTimeout(idleTimeout time.Duration) time.Duration {
+	if idleTimeout <= 0 {
+		return 0
+	}
+	return idleTimeout * 6 / 5
+}
 
 // streamIdleTimeoutEnv is the global override for the stream idle timeout. It
 // accepts a Go duration ("5m", "300s", "90s") or a bare number of seconds
@@ -302,7 +311,7 @@ func ScanSSEDataWithContext(
 		// Content watchdog: only real data lines reset it (keep-alives do not), so a
 		// stream that heartbeats without producing output is bounded instead of
 		// hanging forever.
-		contentTimeout := idleTimeout * StreamContentStallFactor
+		contentTimeout := ContentStallTimeout(idleTimeout)
 		content := time.NewTimer(contentTimeout)
 		defer content.Stop()
 		contentC = content.C
