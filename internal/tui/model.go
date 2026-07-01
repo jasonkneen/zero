@@ -1010,6 +1010,13 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !keyCtrl(msg, 'c') {
 			m = m.disarmExitConfirmation()
 		}
+		// Mirrors the exit-confirmation reset above: any key that isn't itself
+		// the confirming Esc means the user moved on to something else, so a
+		// later, unrelated Esc must arm a fresh confirmation rather than
+		// silently cancel off a stale press from seconds ago.
+		if !keyIs(msg, tea.KeyEsc) {
+			m = m.disarmCancelConfirmation()
+		}
 		// The `?` help overlay is modal: `?`, Esc, q, or Enter close it; every
 		// other key is swallowed so nothing types into the hidden composer.
 		if m.helpOverlay {
@@ -1032,6 +1039,15 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.appendSystemNotice("Mouse interaction re-enabled."), nil
 		case keyIs(msg, tea.KeyEsc):
+			// Esc is heavily overloaded below (subchat exit, MCP cancel, ask-user,
+			// permission deny, wizard/picker/suggestions dismiss, ...) before ever
+			// reaching the run-cancel fallback. Capture whether this press really
+			// is the confirming second Esc BEFORE any of those branches can fire,
+			// then disarm unconditionally: an Esc that gets consumed by one of
+			// them wasn't a confirm, so it must not leave cancelConfirmActive
+			// armed for some later, unrelated Esc to silently act on.
+			wasConfirmingCancel := m.pending && m.cancelConfirmActive
+			m = m.disarmCancelConfirmation()
 			// Subchat view exits on Esc (returns to main chat).
 			if m.subchat.active {
 				m.chatScrollOffset = m.subchat.exit()
@@ -1095,8 +1111,7 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearComposer()
 			m.clearSuggestions()
 			if m.pending {
-				if m.cancelConfirmActive {
-					m = m.disarmCancelConfirmation()
+				if wasConfirmingCancel {
 					m.cancelRun()
 					return m, nil
 				}

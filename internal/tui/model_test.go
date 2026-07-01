@@ -1178,6 +1178,88 @@ func TestEscCancelConfirmationExpires(t *testing.T) {
 	}
 }
 
+// TestEscCancelConfirmationDisarmsOnInterveningKey mirrors
+// TestCtrlCExitConfirmationDisarmsOnInterveningKey: an intervening key other
+// than Esc (typing, Ctrl+O, etc.) means the user moved on to something else,
+// so a later, unrelated Esc must arm a fresh confirmation instead of
+// silently cancelling off a stale press from seconds ago.
+func TestEscCancelConfirmationDisarmsOnInterveningKey(t *testing.T) {
+	m := newModel(context.Background(), Options{})
+	cancelled := false
+	m.pending = true
+	m.activeRunID = 1
+	m.runCancel = func() { cancelled = true }
+
+	updated, _ := m.Update(testKey(tea.KeyEsc))
+	next := updated.(model)
+	if !next.cancelConfirmActive {
+		t.Fatal("first Esc should arm cancel confirmation")
+	}
+	seq := next.cancelConfirmSeq
+
+	updated, _ = next.Update(testKey('h'))
+	next = updated.(model)
+	if next.cancelConfirmActive {
+		t.Fatal("an intervening non-Esc key should disarm cancel confirmation")
+	}
+	if next.cancelConfirmSeq == seq {
+		t.Fatal("disarming should advance the sequence so a stale expiry tick is ignored")
+	}
+
+	updated, _ = next.Update(testKey(tea.KeyEsc))
+	next = updated.(model)
+	if cancelled {
+		t.Fatal("Esc after an intervening key should re-arm, not cancel")
+	}
+	if !next.cancelConfirmActive {
+		t.Fatal("Esc after an intervening key should arm a fresh confirmation")
+	}
+}
+
+// TestEscCancelConfirmationDisarmsWhenStolenByAskUser: a mid-turn ask_user
+// prompt lands between the two Esc presses. The user's second Esc denies the
+// questionnaire (an earlier branch in the Esc handler), not a confirm, so it
+// must not leave cancelConfirmActive armed for a later, unrelated Esc to
+// silently cancel the run.
+func TestEscCancelConfirmationDisarmsWhenStolenByAskUser(t *testing.T) {
+	m := newModel(context.Background(), Options{})
+	cancelled := false
+	m.pending = true
+	m.activeRunID = 1
+	m.runCancel = func() { cancelled = true }
+
+	updated, _ := m.Update(testKey(tea.KeyEsc))
+	next := updated.(model)
+	if !next.cancelConfirmActive {
+		t.Fatal("first Esc should arm cancel confirmation")
+	}
+
+	request := agent.AskUserRequest{Questions: []agent.AskUserQuestion{{Question: "name?"}}}
+	next.pendingAskUser = &pendingAskUserPrompt{
+		request: request,
+		answer:  func([]string) {},
+		states:  newAskUserStates(request.Questions),
+	}
+
+	updated, _ = next.Update(testKey(tea.KeyEsc))
+	next = updated.(model)
+	if cancelled {
+		t.Fatal("an Esc consumed by the ask-user prompt must not cancel the run")
+	}
+	if next.cancelConfirmActive {
+		t.Fatal("an Esc consumed by the ask-user prompt must disarm the stale cancel confirmation")
+	}
+
+	updated, _ = next.Update(testKey(tea.KeyEsc))
+	next = updated.(model)
+	if cancelled {
+		t.Fatal("the next Esc should arm a fresh confirmation, not immediately cancel")
+	}
+	if !next.cancelConfirmActive {
+		t.Fatal("the next Esc should arm a fresh confirmation")
+	}
+}
+
 func TestAgentResponseCompletesStuckPlan(t *testing.T) {
 	runningPlan := func() planPanelState {
 		var s planPanelState
