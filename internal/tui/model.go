@@ -2030,10 +2030,14 @@ func (m model) footerView(width int) string {
 	// while the transcript scrolls underneath (a streaming turn no longer pushes
 	// the plan off-screen). Budgeted to at most a third of the screen height; a
 	// taller plan collapses to a one-line summary so the composer always stays
-	// on screen.
-	if plan := m.renderPinnedPlanPanel(width, m.pinnedPlanMaxHeight()); plan != "" {
-		footer.WriteString(plan)
-		footer.WriteString("\n")
+	// on screen. Skipped in the subchat drill-in: m.plan belongs to the PARENT
+	// run, not the subagent/swarm child session being viewed there, so pinning it
+	// above that composer would show unrelated state.
+	if !m.subchat.active {
+		if plan := m.renderPinnedPlanPanel(width, m.pinnedPlanMaxHeight()); plan != "" {
+			footer.WriteString(plan)
+			footer.WriteString("\n")
+		}
 	}
 	// The row above the composer: transient copy feedback takes priority; otherwise
 	// a faint idle affordance — discoverable key hints on the left, a jump-to-bottom

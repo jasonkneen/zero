@@ -968,16 +968,46 @@ func splitPlainAtDisplayWidth(text string, width int) (string, string) {
 	return text, ""
 }
 
+// transcriptHitTestSource returns the header/body-items/width mouse hit-testing
+// must use to match what's actually on screen. It mirrors transcriptView's own
+// branching exactly: the subchat drill-in swaps BOTH the header (nav bar instead
+// of the pinned title bar) and the row source (the child session's rows instead
+// of the parent transcript) — and drops the sidebar-reserved width, since subchat
+// is always single-column. Hit-testing against the wrong source is why mouse
+// selection previously resolved against transcript rows that weren't even
+// visible while viewing a subagent/swarm child session.
+func (m model) transcriptHitTestSource() (header string, items []transcriptBodyItem, width int) {
+	if m.subchat.active {
+		width = chatWidth(m.width)
+		return renderSubchatNavBar(m.subchat.childSessionTitle, width), m.transcriptBodyItemsFromRows(m.subchat.childRows, width), width
+	}
+	width = m.chatColumnWidth()
+	return m.pinnedTitleBar(width), m.transcriptBodyItems(width, ""), width
+}
+
+// transcriptHitTestBlocked reports whether mouse hit-testing must be skipped
+// outright — a modal/overlay is up, or there's no alt-screen viewport at all.
+func (m model) transcriptHitTestBlocked() bool {
+	return !m.altScreen || m.height <= 0 || m.setup.visible || m.providerWizard != nil || m.mcpAddWizard != nil || m.mcpManager != nil || m.picker != nil || m.suggestionsActive()
+}
+
+// transcriptHitTestLayout computes the frame/window/layout mouse hit-testing needs,
+// shared by transcriptLineAtMouse (exact match) and nearestTranscriptLineAtMouse
+// (nearest-line fallback for scroll-driven selection extension).
+func (m model) transcriptHitTestLayout() (frame transcriptFrameLayout, window transcriptViewportWindow, layout transcriptBodyLayout) {
+	header, items, width := m.transcriptHitTestSource()
+	frame = m.scrollableTranscriptFrame(header, m.footerView(width))
+	metrics := measureTranscriptBodyItems(items, m.transcriptBodyHeights)
+	window = transcriptViewportForLayout(metrics, frame, m.chatScrollOffset).window()
+	layout = layoutVisibleTranscriptBodyItems(items, metrics, window)
+	return frame, window, layout
+}
+
 func (m model) transcriptLineAtMouse(msg tea.MouseMsg) (transcriptSelectableLine, bool) {
-	if !m.altScreen || m.height <= 0 || m.setup.visible || m.providerWizard != nil || m.mcpAddWizard != nil || m.mcpManager != nil || m.picker != nil || m.suggestionsActive() {
+	if m.transcriptHitTestBlocked() {
 		return transcriptSelectableLine{}, false
 	}
-	width := m.chatColumnWidth()
-	frame := m.scrollableTranscriptFrame(m.pinnedTitleBar(width), m.footerView(width))
-	items := m.transcriptBodyItems(width, "")
-	metrics := measureTranscriptBodyItems(items, m.transcriptBodyHeights)
-	window := transcriptViewportForLayout(metrics, frame, m.chatScrollOffset).window()
-	layout := layoutVisibleTranscriptBodyItems(items, metrics, window)
+	frame, window, layout := m.transcriptHitTestLayout()
 	_, localY, ok := frame.bodyRect.local(mouseX(msg), mouseY(msg))
 	if !ok {
 		return transcriptSelectableLine{}, false
@@ -993,6 +1023,44 @@ func (m model) transcriptLineAtMouse(msg tea.MouseMsg) (transcriptSelectableLine
 		return line, true
 	}
 	return transcriptSelectableLine{}, false
+}
+
+// nearestTranscriptLineAtMouse is transcriptLineAtMouse with a fallback for
+// scroll-driven selection extension: the recomputed on-screen position can land
+// exactly on a non-selectable spacer row between messages (blank lines aren't in
+// layout.selectable; a scroll can shift which physical row is text vs spacer), where
+// an EXACT match finds nothing even though real text sits one row away. Falls back
+// to the closest visible selectable line by bodyY, so the selection still extends
+// instead of silently freezing for that scroll tick. Only used for scroll
+// extension — a plain click keeps using transcriptLineAtMouse's exact match, since
+// "nothing there" is a meaningful, correct result for an intentional click below
+// the last line or in dead space.
+func (m model) nearestTranscriptLineAtMouse(msg tea.MouseMsg) (transcriptSelectableLine, bool) {
+	if line, ok := m.transcriptLineAtMouse(msg); ok {
+		return line, true
+	}
+	if m.transcriptHitTestBlocked() {
+		return transcriptSelectableLine{}, false
+	}
+	frame, window, layout := m.transcriptHitTestLayout()
+	_, localY, ok := frame.bodyRect.local(mouseX(msg), mouseY(msg))
+	if !ok || mouseX(msg) < 0 {
+		return transcriptSelectableLine{}, false
+	}
+	target := window.start + localY
+	best := transcriptSelectableLine{}
+	bestDist := -1
+	found := false
+	for _, line := range layout.selectable {
+		dist := line.bodyY - target
+		if dist < 0 {
+			dist = -dist
+		}
+		if !found || dist < bestDist {
+			best, bestDist, found = line, dist, true
+		}
+	}
+	return best, found
 }
 
 func (m model) transcriptViewportStart(body string, width int) (int, int, int) {
@@ -1113,8 +1181,11 @@ func (m model) toggleTranscriptRow(rowIndex int) model {
 }
 
 func (m model) selectedTranscriptText() string {
-	width := m.chatColumnWidth()
-	layout := m.transcriptBodyLayout(width, "")
+	// Must read from the SAME row source transcriptLineAtMouse hit-tested against
+	// (subchat vs parent transcript) — otherwise the selection's bodyY range is
+	// matched against the wrong layout here and copy silently returns nothing.
+	_, items, _ := m.transcriptHitTestSource()
+	layout := layoutTranscriptBodyItems(items)
 	parts := []string{}
 	for _, line := range layout.selectable {
 		start, end, ok := m.selectedColumnsForTranscriptLine(line)
