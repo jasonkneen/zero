@@ -89,6 +89,14 @@ func specialistManifestForMember(spec MemberSpec) specialist.Manifest {
 			Name:        spec.AgentType,
 			Description: "Swarm " + spec.AgentType + " member.",
 			Tools:       swarmMemberToolGroups,
+			// Harness/Provider let different swarm members run on different
+			// external agent CLIs and/or provider profiles; empty means the
+			// default self-exec zero behavior. specialist.Validate (invoked via
+			// executor.Run -> freshManifest) rejects an unknown harness id, so a
+			// bad Definition.Harness surfaces as a member failure with a clear
+			// error rather than silently running self-exec.
+			Harness:  spec.Harness,
+			Provider: spec.Provider,
 		},
 		SystemPrompt: spec.SystemPrompt,
 		Location:     specialist.LocationBuiltin,

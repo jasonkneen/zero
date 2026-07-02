@@ -985,6 +985,25 @@ func TestParseBackgroundTerminalCommands(t *testing.T) {
 	}
 }
 
+func TestParseOnlyBashCommand(t *testing.T) {
+	cases := []struct {
+		input string
+		kind  commandKind
+		text  string
+	}{
+		{input: "/onlybash", kind: commandOnlyBash, text: ""},
+		{input: "/onlybash on", kind: commandOnlyBash, text: "on"},
+		{input: "/onlybash off", kind: commandOnlyBash, text: "off"},
+		{input: "/onlybash status", kind: commandOnlyBash, text: "status"},
+	}
+	for _, tc := range cases {
+		got := parseCommand(tc.input)
+		if got.kind != tc.kind || got.text != tc.text {
+			t.Fatalf("%q: got kind=%v text=%q, want kind=%v text=%q", tc.input, got.kind, got.text, tc.kind, tc.text)
+		}
+	}
+}
+
 func TestCommandSelectionRequiresInputFromUsage(t *testing.T) {
 	cases := []struct {
 		name string

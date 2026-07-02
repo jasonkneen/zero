@@ -32,6 +32,13 @@ type Definition struct {
 	WhenToUse      string
 	Model          string // "inherit" => use the orchestrator's model
 	PermissionMode string
+	// Harness, when set, is an agentcli.Harness id: members of this agent type
+	// run that external agent CLI instead of self-exec zero. See
+	// MemberSpec.Harness.
+	Harness string
+	// Provider pins a config provider profile name for members of this agent
+	// type. See MemberSpec.Provider.
+	Provider string
 	// SystemPrompt returns the member's system prompt for the given task context.
 	// It is a func so a definition can fold the task briefing in.
 	SystemPrompt func(ctx PromptContext) string

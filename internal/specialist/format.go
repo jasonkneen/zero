@@ -43,6 +43,12 @@ func FormatShow(manifest Manifest) string {
 	if manifest.Metadata.ReasoningEffort != "" {
 		lines = append(lines, "reasoning effort: "+manifest.Metadata.ReasoningEffort)
 	}
+	if manifest.Metadata.Harness != "" {
+		lines = append(lines, "harness: "+manifest.Metadata.Harness)
+	}
+	if manifest.Metadata.Provider != "" {
+		lines = append(lines, "provider: "+manifest.Metadata.Provider)
+	}
 	tools := formatTools(manifest)
 	if tools != "" {
 		lines = append(lines, "tools: "+tools)

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/providercatalog"
 )
@@ -18,10 +19,14 @@ type Action struct {
 type ProviderState struct {
 	Profile config.ProviderProfile
 	Active  bool
+	// Detections are the machine's detected agent-CLI harnesses (agentcli.Detect),
+	// optional. Nil/empty just means "no CLI advice available" — Actions() then
+	// behaves exactly as it did before AuthCLI existed.
+	Detections []agentcli.Detection
 }
 
 func (state ProviderState) Actions() []Action {
-	return ProviderActions(state.Profile, state.Active)
+	return ProviderActionsWithDetections(state.Profile, state.Active, state.Detections)
 }
 
 func SetupCommand(descriptor providercatalog.Descriptor, name string, setActive bool) string {
@@ -60,6 +65,15 @@ func CheckCommand(name string, connectivity bool) string {
 }
 
 func MissingCredentialAction(profile config.ProviderProfile) (Action, bool) {
+	return MissingCredentialActionWithDetections(profile, nil)
+}
+
+// MissingCredentialActionWithDetections is MissingCredentialAction plus a hint
+// that a detected, logged-in agent-CLI harness could supply this provider's
+// credentials instead of an API key (see cliCredentialHint). detections is
+// typically agentcli.Detect's result; nil behaves exactly like
+// MissingCredentialAction.
+func MissingCredentialActionWithDetections(profile config.ProviderProfile, detections []agentcli.Detection) (Action, bool) {
 	advice := credentialAdviceForProfile(profile)
 	if !advice.requiresAuth || providerProfileHasCredential(profile) {
 		return Action{}, false
@@ -71,6 +85,9 @@ func MissingCredentialAction(profile config.ProviderProfile) (Action, bool) {
 		detail = "Set " + advice.envVar + " to your provider API key before using this provider."
 		command = "set " + advice.envVar + " in your shell"
 	}
+	if hint := cliCredentialHint(profile.CatalogID, detections); hint != "" {
+		detail += " " + hint
+	}
 	return Action{
 		Label:   "Set API key",
 		Command: command,
@@ -78,7 +95,32 @@ func MissingCredentialAction(profile config.ProviderProfile) (Action, bool) {
 	}, true
 }
 
+// cliCredentialHint returns an aside noting that a detected, logged-in agent
+// CLI (e.g. Claude Code) could supply this catalog id's credentials instead of
+// an API key — surfaced so a user who already has that CLI installed sees the
+// CLI connect method as an alternative to pasting a key. Empty when no
+// detection matches catalogID or none of the matches are logged in.
+func cliCredentialHint(catalogID string, detections []agentcli.Detection) string {
+	catalogID = strings.TrimSpace(catalogID)
+	if catalogID == "" {
+		return ""
+	}
+	for _, detection := range detections {
+		if detection.Harness.CatalogID == catalogID && detection.Login == agentcli.LoggedIn {
+			return "Or reuse your " + detection.Harness.DisplayName +
+				" login instead — open /provider and choose \"Use " + detection.Harness.DisplayName + " login\"."
+		}
+	}
+	return ""
+}
+
 func ProviderActions(profile config.ProviderProfile, active bool) []Action {
+	return ProviderActionsWithDetections(profile, active, nil)
+}
+
+// ProviderActionsWithDetections is ProviderActions plus agent-CLI detections
+// threaded through to MissingCredentialActionWithDetections.
+func ProviderActionsWithDetections(profile config.ProviderProfile, active bool, detections []agentcli.Detection) []Action {
 	name := strings.TrimSpace(profile.Name)
 	actions := make([]Action, 0, 3)
 	if name != "" && !active {
@@ -95,7 +137,7 @@ func ProviderActions(profile config.ProviderProfile, active bool) []Action {
 			Detail:  "Validate the provider profile without probing network connectivity.",
 		})
 	}
-	if action, ok := MissingCredentialAction(profile); ok {
+	if action, ok := MissingCredentialActionWithDetections(profile, detections); ok {
 		actions = append(actions, action)
 	}
 	return actions
@@ -140,7 +182,9 @@ func effectiveProviderKind(profile config.ProviderProfile) config.ProviderKind {
 }
 
 func providerProfileHasCredential(profile config.ProviderProfile) bool {
-	return strings.TrimSpace(profile.APIKey) != "" || strings.TrimSpace(profile.AuthHeaderValue) != ""
+	return strings.TrimSpace(profile.APIKey) != "" ||
+		strings.TrimSpace(profile.AuthHeaderValue) != "" ||
+		strings.TrimSpace(profile.AuthCLI) != ""
 }
 
 func firstAuthEnvVar(descriptor providercatalog.Descriptor) string {

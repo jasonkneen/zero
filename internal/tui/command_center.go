@@ -507,7 +507,12 @@ func (m model) switchProviderModel(providerName, modelID string) (model, string,
 	// Gate on the resolved credential, not the APIKeyStored marker: if the stored key
 	// was deleted/unreadable the marker can still be set, and building a keyless
 	// provider would only fail later with a 401. Local/no-auth providers need no key.
-	if strings.TrimSpace(target.APIKey) == "" && strings.TrimSpace(target.AuthHeaderValue) == "" && !(hasDescriptor && descriptor.Local) {
+	// AuthCLI profiles are deliberately exempt: their credential is live-read from
+	// the agent CLI's own store inside the provider factory, so an empty APIKey here
+	// is the normal, healthy state — the factory surfaces its own actionable error
+	// (e.g. "claude login has expired") if the CLI login is actually unusable.
+	if strings.TrimSpace(target.APIKey) == "" && strings.TrimSpace(target.AuthHeaderValue) == "" &&
+		strings.TrimSpace(target.AuthCLI) == "" && !(hasDescriptor && descriptor.Local) {
 		return m, "Model\nprovider " + strconv.Quote(providerName) + " has no usable credential — run setup or `zero auth login " + providerName + "`.", nil
 	}
 	next, err := m.newProvider(target)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/oauth"
 	"github.com/Gitlawb/zero/internal/provideroauth"
@@ -41,6 +42,8 @@ func runAuth(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 		return runAuthOpenRouter(args[1:], stdout, stderr, deps)
 	case "chatgpt":
 		return runAuthChatGPT(args[1:], stdout, stderr, deps)
+	case "claude":
+		return runAuthClaude(args[1:], stdout, stderr, deps)
 	default:
 		return writeExecUsageError(stderr, fmt.Sprintf("unknown auth subcommand %q", args[0]))
 	}
@@ -139,6 +142,53 @@ func runAuthChatGPT(args []string, stdout io.Writer, stderr io.Writer, deps appD
 		return exitCrash
 	}
 	if _, err := fmt.Fprint(stdout, "\nUse it with zero, e.g.:\n  zero --provider chatgpt --model gpt-5.5\n"); err != nil {
+		return exitCrash
+	}
+	return exitSuccess
+}
+
+// runAuthClaude runs zero's own "Sign in with Claude" paste-code PKCE login
+// and persists the chain under the key the claude CLI-auth resolver reads
+// FIRST (providers.claudeRefreshingBearerResolver's cache). This exists
+// because borrowing the claude CLI's stored login is unreliable on machines
+// where newer Claude Code versions keep their live chain in per-install
+// keychain entries: detection sees "logged in" while every readable token is
+// an abandoned, unrefreshable chain. A login zero owns sidesteps the CLI's
+// storage entirely and self-refreshes via RefreshClaudeCode.
+func runAuthClaude(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) int {
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "help" {
+			_ = writeAuthHelp(stdout)
+			return exitSuccess
+		}
+	}
+	if len(args) > 0 {
+		return writeExecUsageError(stderr, fmt.Sprintf("zero auth claude takes no arguments (got %q)", args[0]))
+	}
+
+	token, err := provideroauth.ClaudeCodeLogin(context.Background(), provideroauth.ClaudeCodeLoginOptions{
+		HTTPClient: &http.Client{Timeout: 60 * time.Second},
+		Out:        stdout,
+		// Print the URL rather than auto-opening a browser, matching the
+		// posture of the other auth subcommands.
+		OpenBrowser: func(string) error { return nil },
+	})
+	if err != nil {
+		return writeAppError(stderr, redaction.ErrorMessage(err, redaction.Options{}), exitCrash)
+	}
+
+	store, err := oauth.NewStore(oauth.StoreOptions{Now: deps.now})
+	if err != nil {
+		return writeAppError(stderr, redaction.ErrorMessage(err, redaction.Options{}), exitCrash)
+	}
+	if err := store.Save("provider:authcli-claude", token); err != nil {
+		return writeAppError(stderr, redaction.ErrorMessage(err, redaction.Options{}), exitCrash)
+	}
+	account := ""
+	if strings.TrimSpace(token.Account) != "" {
+		account = " as " + token.Account
+	}
+	if _, err := fmt.Fprintf(stdout, "\nClaude sign-in complete%s — token stored; zero refreshes it automatically.\nUse it with a claude CLI-auth profile, e.g.:\n  zero --provider claude\n", account); err != nil {
 		return exitCrash
 	}
 	return exitSuccess
@@ -393,22 +443,108 @@ func runAuthStatus(args []string, stdout io.Writer, stderr io.Writer, deps appDe
 	if err != nil {
 		return writeAppError(stderr, redaction.ErrorMessage(err, redaction.Options{}), exitCrash)
 	}
-	if len(parsed.positional) == 1 {
+	filtered := len(parsed.positional) == 1
+	if filtered {
 		statuses = filterAuthStatuses(statuses, parsed.positional[0])
+	}
+	// Detected agent CLIs (Claude Code, Codex, ...) are a second, independent
+	// auth surface from zero's own OAuth store — only shown on the unfiltered
+	// `zero auth status` (a `zero auth status <provider>` query is about one
+	// zero-native login, not the whole-machine CLI inventory).
+	var agentCLIs []authAgentCLIStatus
+	if !filtered {
+		agentCLIs = agentCLIAuthStatuses(deps)
 	}
 	if parsed.json {
 		payload := struct {
-			Logins []oauth.Status `json:"logins"`
-		}{Logins: statuses}
+			Logins    []oauth.Status       `json:"logins"`
+			AgentCLIs []authAgentCLIStatus `json:"agentCLIs,omitempty"`
+		}{Logins: statuses, AgentCLIs: agentCLIs}
 		if err := writePrettyJSON(stdout, payload); err != nil {
 			return exitCrash
 		}
 		return exitSuccess
 	}
-	if _, err := fmt.Fprintln(stdout, oauth.FormatStatuses(statuses)); err != nil {
+	out := oauth.FormatStatuses(statuses)
+	if section := formatAgentCLIStatuses(agentCLIs); section != "" {
+		out += "\n\n" + section
+	}
+	if _, err := fmt.Fprintln(stdout, out); err != nil {
 		return exitCrash
 	}
 	return exitSuccess
+}
+
+// authAgentCLIStatus is one detected agent-CLI harness's login state and,
+// when a zero provider profile is configured to reuse it (profile.AuthCLI ==
+// harness.ID), that profile's name.
+type authAgentCLIStatus struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	LoggedIn    bool   `json:"loggedIn"`
+	Reusable    bool   `json:"reusable"`
+	Profile     string `json:"profile,omitempty"`
+}
+
+// agentCLIAuthStatuses lists every agent CLI detected on this machine, its
+// probed login state, and which zero provider profile (if any) reuses its
+// credentials. Config resolution is best-effort: a failure to resolve the
+// workspace config just means every row reports no profile, never an error —
+// `zero auth status` must not fail because the CWD has no zero config.
+func agentCLIAuthStatuses(deps appDeps) []authAgentCLIStatus {
+	detect := deps.detectAgentCLIs
+	if detect == nil {
+		detect = agentcli.Detect
+	}
+	detections := detect(agentcli.Deps{})
+	if len(detections) == 0 {
+		return nil
+	}
+	profileByCLI := map[string]string{}
+	if workspaceRoot, err := resolveWorkspaceRoot("", deps); err == nil {
+		if resolved, err := deps.resolveConfig(workspaceRoot, config.Overrides{}); err == nil {
+			for _, profile := range resolved.Providers {
+				if authCLI := strings.TrimSpace(profile.AuthCLI); authCLI != "" {
+					profileByCLI[authCLI] = profile.Name
+				}
+			}
+		}
+	}
+	out := make([]authAgentCLIStatus, 0, len(detections))
+	for _, detection := range detections {
+		out = append(out, authAgentCLIStatus{
+			ID:          detection.Harness.ID,
+			DisplayName: detection.Harness.DisplayName,
+			LoggedIn:    detection.Login == agentcli.LoggedIn,
+			Reusable:    detection.Harness.CatalogID != "",
+			Profile:     profileByCLI[detection.Harness.ID],
+		})
+	}
+	return out
+}
+
+// formatAgentCLIStatuses renders the "Detected agent CLIs" section for the
+// text (non-JSON) `zero auth status` output. Empty when nothing was detected.
+func formatAgentCLIStatuses(statuses []authAgentCLIStatus) string {
+	if len(statuses) == 0 {
+		return ""
+	}
+	lines := []string{"Detected agent CLIs:"}
+	for _, status := range statuses {
+		state := "not logged in"
+		if status.LoggedIn {
+			state = "logged in"
+		}
+		line := fmt.Sprintf("  %s (%s) — %s", status.ID, status.DisplayName, state)
+		switch {
+		case !status.Reusable:
+			line += " — sub-agent harness only, no reusable provider credentials"
+		case status.Profile != "":
+			line += fmt.Sprintf(" — used by profile %q", status.Profile)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func runAuthRefresh(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) int {
@@ -485,6 +621,7 @@ Commands:
   refresh <provider> [--watch]                    Force a token refresh (--watch keeps it fresh)
   openrouter                                      Log in to OpenRouter in the browser; mints an API key
   chatgpt                                         Log in to ChatGPT in the browser (Codex backend, ChatGPT Plus/Pro)
+  claude                                          Sign in with Claude (paste-code flow; Claude subscription auth)
 
 A provider is any OAuth 2.0 / OIDC server. "openrouter" ('zero auth openrouter')
 works out of the box. "xai" ('zero auth login xai') uses a built-in preset that is

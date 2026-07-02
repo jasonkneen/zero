@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/providercatalog"
 )
@@ -214,6 +215,64 @@ func TestProviderActionsDoNotLeakStoredSecrets(t *testing.T) {
 
 	actions := ProviderActions(profile, false)
 	assertNoSecretLeak(t, actions, apiKey, headerValue)
+}
+
+// TestMissingCredentialActionAuthCLISkipsProfile locks in that a CLI-authed
+// profile (AuthCLI set, no key) is treated as already credentialed — without
+// this, MissingCredentialAction would tell a user who chose the CLI connect
+// method to go paste an API key.
+func TestMissingCredentialActionAuthCLISkipsProfile(t *testing.T) {
+	profile := config.ProviderProfile{
+		Name:      "claude",
+		CatalogID: "anthropic",
+		AuthCLI:   "claude",
+	}
+	if _, ok := MissingCredentialAction(profile); ok {
+		t.Fatal("MissingCredentialAction() ok = true, want false for an AuthCLI profile")
+	}
+}
+
+// TestMissingCredentialActionWithDetectionsMentionsLoggedInCLI covers "surface
+// the CLI option when the harness is detected": a profile missing a key gets
+// a hint pointing at a detected, logged-in matching harness.
+func TestMissingCredentialActionWithDetectionsMentionsLoggedInCLI(t *testing.T) {
+	claudeHarness, ok := agentcli.Lookup("claude")
+	if !ok {
+		t.Fatal("test assumption broken: claude missing from the agentcli catalog")
+	}
+	profile := config.ProviderProfile{Name: "anthropic", CatalogID: "anthropic"}
+
+	// No detections at all: MissingCredentialAction (detections=nil) behaves
+	// exactly as before — no CLI hint.
+	before, ok := MissingCredentialAction(profile)
+	if !ok {
+		t.Fatal("MissingCredentialAction() ok = false, want true (no credential configured)")
+	}
+	if strings.Contains(before.Detail, "Claude Code") {
+		t.Fatalf("Detail should not mention Claude Code with no detections: %q", before.Detail)
+	}
+
+	// A logged-in claude detection adds the hint.
+	withHint, ok := MissingCredentialActionWithDetections(profile, []agentcli.Detection{
+		{Harness: claudeHarness, Login: agentcli.LoggedIn},
+	})
+	if !ok {
+		t.Fatal("MissingCredentialActionWithDetections() ok = false, want true")
+	}
+	if !strings.Contains(withHint.Detail, "Claude Code") {
+		t.Fatalf("Detail = %q, want it to mention the detected Claude Code login", withHint.Detail)
+	}
+
+	// A logged-OUT claude detection must NOT add the hint (nothing to reuse yet).
+	loggedOut, ok := MissingCredentialActionWithDetections(profile, []agentcli.Detection{
+		{Harness: claudeHarness, Login: agentcli.LoggedOut},
+	})
+	if !ok {
+		t.Fatal("MissingCredentialActionWithDetections() ok = false, want true")
+	}
+	if strings.Contains(loggedOut.Detail, "Claude Code") {
+		t.Fatalf("Detail = %q, should not mention a logged-out CLI", loggedOut.Detail)
+	}
 }
 
 func assertNoSecretLeak(t *testing.T, actions []Action, secrets ...string) {

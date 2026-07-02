@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Gitlawb/zero/internal/agent"
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/hooks"
 	"github.com/Gitlawb/zero/internal/localcontrol"
@@ -53,9 +54,14 @@ type appDeps struct {
 	// config.SetActiveProviderEnv, set in defaultAppDeps — deliberately NOT filled
 	// by fillAppDeps, so tests never mutate the process environment unless they
 	// inject it). nil ⇒ no export.
-	exportActiveProvider  func(providerName string)
-	probeProviderHealth   func(context.Context, providerhealth.Options) providerhealth.Result
-	detectLocalRuntimes   func(context.Context, provideronboarding.LocalDetectOptions) []provideronboarding.DetectedLocalRuntime
+	exportActiveProvider func(providerName string)
+	probeProviderHealth  func(context.Context, providerhealth.Options) providerhealth.Result
+	detectLocalRuntimes  func(context.Context, provideronboarding.LocalDetectOptions) []provideronboarding.DetectedLocalRuntime
+	// detectAgentCLIs probes the machine for installed agent-CLI harnesses
+	// (Claude Code, Codex, ...) — production: agentcli.Detect with the real
+	// (zero-value) Deps. Tests inject a fake so `zero auth status` and the
+	// credential-advice surfaces never touch a real PATH/keychain.
+	detectAgentCLIs       func(agentcli.Deps) []agentcli.Detection
 	newSessionStore       func() *sessions.Store
 	loadPlugins           func(plugins.LoadOptions) (plugins.LoadResult, error)
 	loadHooks             func(hooks.LoadOptions) (hooks.LoadResult, error)
@@ -136,6 +142,7 @@ func defaultAppDeps() appDeps {
 		},
 		probeProviderHealth: providerhealth.Probe,
 		detectLocalRuntimes: provideronboarding.DetectLocalRuntimes,
+		detectAgentCLIs:     agentcli.Detect,
 		newSessionStore: func() *sessions.Store {
 			return sessions.NewStore(sessions.StoreOptions{})
 		},
@@ -434,6 +441,9 @@ func fillAppDeps(deps appDeps) appDeps {
 	}
 	if deps.detectLocalRuntimes == nil {
 		deps.detectLocalRuntimes = defaults.detectLocalRuntimes
+	}
+	if deps.detectAgentCLIs == nil {
+		deps.detectAgentCLIs = defaults.detectAgentCLIs
 	}
 	if deps.newSessionStore == nil {
 		deps.newSessionStore = defaults.newSessionStore
@@ -1116,11 +1126,11 @@ func splitLeadingThemeFlag(args []string) (string, []string, error) {
 }
 
 // profileHasCredential reports whether the profile can authenticate: a direct API
-// key, an auth-header value, or an APIKeyEnv whose environment variable is set. The
-// setup result is not env-resolved, so checking APIKey alone would wrongly flag every
-// env-var-based provider as keyless.
+// key, an auth-header value, an APIKeyEnv whose environment variable is set, or a
+// reused agent-CLI login (AuthCLI). The setup result is not env-resolved, so
+// checking APIKey alone would wrongly flag every env-var-based provider as keyless.
 func profileHasCredential(profile config.ProviderProfile) bool {
-	if strings.TrimSpace(profile.APIKey) != "" || profile.APIKeyStored || strings.TrimSpace(profile.AuthHeaderValue) != "" {
+	if profile.HasConfiguredCredential() {
 		return true
 	}
 	if env := strings.TrimSpace(profile.APIKeyEnv); env != "" {

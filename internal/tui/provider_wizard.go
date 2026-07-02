@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/browser"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/oauth"
@@ -251,30 +252,107 @@ const (
 	providerWizardStepDone
 )
 
+// providerWizardMethodKind distinguishes the three ways the wizard can connect
+// a provider: a pasted/env API key, zero's own browser OAuth login, or reusing
+// a detected agent-CLI's (Claude Code, Codex, ...) existing local login.
+type providerWizardMethodKind int
+
+const (
+	providerWizardMethodKey providerWizardMethodKind = iota
+	providerWizardMethodOAuth
+	providerWizardMethodCLI
+)
+
 // providerWizardMethodOption is a row in the "How do you want to connect?" step.
 type providerWizardMethodOption struct {
-	oauth    bool
+	kind     providerWizardMethodKind
 	label    string
 	subtitle string
+	// harness and loggedIn are set only for kind == providerWizardMethodCLI:
+	// harness is the detected agent CLI this row reuses credentials from, and
+	// loggedIn mirrors its probed agentcli.LoginState (LoggedIn == true).
+	harness  agentcli.Harness
+	loggedIn bool
+	// disabled marks an informational-only CLI row: a detected harness with no
+	// reusable provider credentials (agentcli.Harness.CatalogID == ""), shown
+	// so the user sees it was auto-detected as a sub-agent harness but cannot
+	// be selected as a connect method.
+	disabled bool
 }
 
-// providerWizardMethodOptions returns the connect-method rows. OAuth is listed
-// first (and is the default) when any OAuth-capable provider exists.
-func providerWizardMethodOptions() []providerWizardMethodOption {
+// providerWizardMethodOptions returns the connect-method rows: OAuth first (when
+// any OAuth-capable provider exists), then one row per detected agent CLI, then
+// "paste an API key" last. Detections come from the caller (agentcli.Detect,
+// run once at wizard construction — see providerWizardState.agentCLIDetections)
+// rather than probed here, so this function is cheap to call on every
+// render/keystroke and is trivially testable with a hand-built detection list.
+func providerWizardMethodOptions(detections []agentcli.Detection) []providerWizardMethodOption {
 	options := []providerWizardMethodOption{}
 	if len(providercatalog.OAuthProviders()) > 0 {
 		options = append(options, providerWizardMethodOption{
-			oauth:    true,
+			kind:     providerWizardMethodOAuth,
 			label:    "Sign in with OAuth",
 			subtitle: "One-click browser login, no API key to copy (OpenRouter, xAI, ChatGPT, Hugging Face).",
 		})
 	}
+	options = append(options, providerWizardCLIMethodOptions(detections)...)
 	options = append(options, providerWizardMethodOption{
-		oauth:    false,
+		kind:     providerWizardMethodKey,
 		label:    "Paste an API key / browse providers",
 		subtitle: "Any of 20+ providers, a local model, or a subscription via proxy.",
 	})
 	return options
+}
+
+// providerWizardCLIMethodOptions builds one method row per detected agent CLI:
+// a selectable "Use <name> login" row when the harness's credentials are
+// reusable by a zero provider (Harness.CatalogID != ""), or a disabled
+// informational row otherwise — so a detected gemini/qwen/etc CLI is visible
+// (confirming auto-detection worked) even though it has no zero provider to
+// attach to and can only run as a sub-agent harness.
+func providerWizardCLIMethodOptions(detections []agentcli.Detection) []providerWizardMethodOption {
+	options := make([]providerWizardMethodOption, 0, len(detections))
+	for _, detection := range detections {
+		harness := detection.Harness
+		if harness.CatalogID == "" {
+			options = append(options, providerWizardMethodOption{
+				kind:     providerWizardMethodCLI,
+				disabled: true,
+				harness:  harness,
+				label:    harness.DisplayName,
+				subtitle: "Detected — usable as a sub-agent harness; no reusable API credentials.",
+			})
+			continue
+		}
+		loggedIn := detection.Login == agentcli.LoggedIn
+		state := "installed, not logged in"
+		switch detection.Login {
+		case agentcli.LoggedIn:
+			state = "logged in"
+		case agentcli.LoginUnknown:
+			state = "installed"
+		}
+		options = append(options, providerWizardMethodOption{
+			kind:     providerWizardMethodCLI,
+			harness:  harness,
+			loggedIn: loggedIn,
+			label:    "Use " + harness.DisplayName + " login",
+			subtitle: "Detected — " + state + ". Reuses its credentials, no separate key.",
+		})
+	}
+	return options
+}
+
+// firstSelectableMethodIndex returns the index of the first non-disabled row,
+// so a wizard/setup never opens with the cursor parked on an informational
+// (unselectable) CLI row.
+func firstSelectableMethodIndex(options []providerWizardMethodOption) int {
+	for index, option := range options {
+		if !option.disabled {
+			return index
+		}
+	}
+	return 0
 }
 
 // providerWizardOAuthDescriptors returns the OAuth-capable providers as the
@@ -318,17 +396,38 @@ type providerWizardState struct {
 	oauthDevice           bool
 	deviceUserCode        string
 	deviceVerificationURI string
+	// agentCLIDetections is captured ONCE at wizard construction (see
+	// newProviderWizard) rather than reprobed on every render/keystroke —
+	// agentcli.Detect shells out to `security` for the macOS keychain, which
+	// would make every method-step render/move/canAdvance call pay that cost.
+	agentCLIDetections []agentcli.Detection
+	// cliHarness is set when the CLI connect method was chosen: the wizard
+	// skips the provider-chooser step entirely (the row already names the
+	// provider) and jumps straight to model selection.
+	cliHarness *agentcli.Harness
 }
 
 func (m model) newProviderWizard() *providerWizardState {
+	detections := agentcli.Detect(agentcli.Deps{})
 	providers := providerWizardProviders()
 	wizard := &providerWizardState{
-		step:             providerWizardStepMethod,
-		providers:        providers,
-		selectedProvider: 0,
+		step:               providerWizardStepMethod,
+		providers:          providers,
+		selectedProvider:   0,
+		agentCLIDetections: detections,
 	}
+	wizard.selectedMethod = firstSelectableMethodIndex(wizard.methodOptions())
 	wizard.refreshModels()
 	return wizard
+}
+
+// methodOptions returns this wizard's connect-method rows, built from the
+// detections captured once at construction (see agentCLIDetections).
+func (wizard *providerWizardState) methodOptions() []providerWizardMethodOption {
+	if wizard == nil {
+		return nil
+	}
+	return providerWizardMethodOptions(wizard.agentCLIDetections)
 }
 
 func providerWizardProviders() []providercatalog.Descriptor {
@@ -393,11 +492,21 @@ func (wizard *providerWizardState) move(delta int) {
 	}
 	switch wizard.step {
 	case providerWizardStepMethod:
-		options := providerWizardMethodOptions()
+		options := wizard.methodOptions()
 		if len(options) == 0 {
 			return
 		}
-		wizard.selectedMethod = ((wizard.selectedMethod+delta)%len(options) + len(options)) % len(options)
+		next := wizard.selectedMethod
+		// Skip disabled (informational-only) rows — they are visible but not
+		// selectable. Bounded by len(options): "paste an API key" is always
+		// present and never disabled, so this always terminates.
+		for i := 0; i < len(options); i++ {
+			next = ((next+delta)%len(options) + len(options)) % len(options)
+			if !options[next].disabled {
+				break
+			}
+		}
+		wizard.selectedMethod = next
 	case providerWizardStepProvider:
 		if len(wizard.providers) == 0 {
 			return
@@ -431,19 +540,56 @@ func (wizard *providerWizardState) advance() {
 	}
 	switch wizard.step {
 	case providerWizardStepMethod:
-		options := providerWizardMethodOptions()
+		options := wizard.methodOptions()
 		wizard.selectedMethod = clampInt(wizard.selectedMethod, 0, maxInt(0, len(options)-1))
 		wizard.err = ""
-		if len(options) > 0 && options[wizard.selectedMethod].oauth {
+		if len(options) == 0 {
+			return
+		}
+		selected := options[wizard.selectedMethod]
+		wizard.oauthMode = false
+		wizard.cliHarness = nil
+		switch selected.kind {
+		case providerWizardMethodOAuth:
 			wizard.oauthMode = true
 			wizard.providers = providerWizardOAuthDescriptors()
-		} else {
-			wizard.oauthMode = false
+			wizard.selectedProvider = 0
+			wizard.refreshModels()
+			wizard.step = providerWizardStepProvider
+		case providerWizardMethodCLI:
+			if selected.disabled {
+				// Informational row only — nothing to advance into.
+				return
+			}
+			if !selected.loggedIn {
+				wizard.err = selected.harness.DisplayName + " is not logged in — run `" +
+					selected.harness.LoginCommand() + "` to log in, then try again."
+				return
+			}
+			descriptor, ok := providercatalog.Get(selected.harness.CatalogID)
+			if !ok {
+				wizard.err = "no provider catalog entry for " + selected.harness.CatalogID
+				return
+			}
+			harness := selected.harness
+			wizard.cliHarness = &harness
+			wizard.providers = []providercatalog.Descriptor{descriptor}
+			wizard.selectedProvider = 0
+			wizard.apiKey = ""
+			wizard.baseURL = ""
+			wizard.profileName = ""
+			wizard.refreshModels()
+			// The CLI row already names the provider — skip the provider
+			// chooser and the credential step (the login IS the credential)
+			// and go straight to model selection, mirroring how a successful
+			// OAuth login (applyProviderWizardOAuth) skips ahead too.
+			wizard.step = providerWizardStepModel
+		default:
 			wizard.providers = providerWizardProviders()
+			wizard.selectedProvider = 0
+			wizard.refreshModels()
+			wizard.step = providerWizardStepProvider
 		}
-		wizard.selectedProvider = 0
-		wizard.refreshModels()
-		wizard.step = providerWizardStepProvider
 	case providerWizardStepProvider:
 		// In OAuth mode, advancing starts the browser/device login (dispatched by
 		// advanceProviderWizard at the model level), not the key/endpoint flow.
@@ -524,7 +670,12 @@ func (wizard *providerWizardState) retreat() {
 			wizard.step = providerWizardStepProvider
 		}
 	case providerWizardStepModel:
-		if providerWizardNeedsCredential(wizard.currentProvider()) {
+		if wizard.cliHarness != nil {
+			// CLI mode jumped straight from Method to Model (no provider/
+			// credential step was ever shown), so back up straight to Method.
+			wizard.cliHarness = nil
+			wizard.step = providerWizardStepMethod
+		} else if providerWizardNeedsCredential(wizard.currentProvider()) {
 			wizard.step = providerWizardStepCredential
 		} else if providerWizardNeedsEndpoint(wizard.currentProvider()) {
 			wizard.step = providerWizardStepEndpoint
@@ -764,7 +915,12 @@ func (wizard *providerWizardState) canAdvanceWithRight() bool {
 	}
 	switch wizard.step {
 	case providerWizardStepMethod:
-		return len(providerWizardMethodOptions()) > 0
+		options := wizard.methodOptions()
+		if len(options) == 0 {
+			return false
+		}
+		index := clampInt(wizard.selectedMethod, 0, len(options)-1)
+		return !options[index].disabled
 	case providerWizardStepProvider:
 		return strings.TrimSpace(wizard.currentProvider().ID) != ""
 	case providerWizardStepEndpoint:
@@ -886,7 +1042,12 @@ func (m model) applyProviderWizard() (model, tea.Cmd) {
 	}
 	provider := wizard.currentProvider()
 	modelChoice := wizard.currentModel()
-	profile := providerWizardProfile(provider, modelChoice.ID, wizard.apiKey, wizard.baseURL, wizard.profileName)
+	var profile config.ProviderProfile
+	if wizard.cliHarness != nil {
+		profile = providerWizardCLIProfile(*wizard.cliHarness, provider, modelChoice.ID)
+	} else {
+		profile = providerWizardProfile(provider, modelChoice.ID, wizard.apiKey, wizard.baseURL, wizard.profileName)
+	}
 	runtimeProfile := providerWizardRuntimeProfile(profile)
 
 	// Build and persist into LOCALS first, committing live state only once BOTH
@@ -1124,6 +1285,15 @@ func providerWizardStepLine(wizard *providerWizardState) string {
 		{providerWizardStepProvider, "2 provider"},
 	}
 	switch {
+	case wizard.cliHarness != nil:
+		// CLI path skips the provider chooser too — the method row already
+		// named the provider — so it never shows "2 provider" as a step of
+		// its own; jump straight from method to model.
+		steps = []stepLabel{
+			{providerWizardStepMethod, "1 method"},
+			{providerWizardStepModel, "2 model"},
+			{providerWizardStepDone, "3 ready"},
+		}
 	case wizard.oauthMode:
 		// OAuth path skips endpoint/name/key entirely.
 		steps = append(steps,
@@ -1158,10 +1328,17 @@ func providerWizardStepLine(wizard *providerWizardState) string {
 
 // renderMethodStep renders the "How do you want to connect?" chooser.
 func (wizard *providerWizardState) renderMethodStep(width int) []string {
-	options := providerWizardMethodOptions()
+	options := wizard.methodOptions()
 	wizard.selectedMethod = clampInt(wizard.selectedMethod, 0, maxInt(0, len(options)-1))
 	lines := []string{zeroTheme.accent.Render("How do you want to connect?")}
 	for index, option := range options {
+		if option.disabled {
+			// Informational-only row: always faint, never shows a selection
+			// marker (move() never parks the cursor here).
+			lines = append(lines, fitStyledLine("  "+zeroTheme.faint.Render(option.label), width))
+			lines = append(lines, fitStyledLine("    "+zeroTheme.faint.Render(option.subtitle), width))
+			continue
+		}
 		surface := transparentSurface
 		marker := surface(zeroTheme.faintest).Render("  ")
 		if index == wizard.selectedMethod {
@@ -1541,10 +1718,14 @@ func (wizard *providerWizardState) renderDoneStep(width int) []string {
 	if providerWizardNeedsEndpoint(provider) {
 		lines = append(lines, zeroTheme.ink.Render("Endpoint    "+strings.TrimSpace(wizard.baseURL)))
 	}
+	credential := providerWizardCredentialLabel(provider, wizard.apiKey)
+	if wizard.cliHarness != nil {
+		credential = wizard.cliHarness.DisplayName + " login"
+	}
 	lines = append(lines,
 		zeroTheme.ink.Render("Name        "+providerWizardDisplayName(provider, wizard.baseURL, wizard.profileName)),
 		zeroTheme.ink.Render("Model       "+model.ID),
-		zeroTheme.ink.Render("Credential  "+providerWizardCredentialLabel(provider, wizard.apiKey)),
+		zeroTheme.ink.Render("Credential  "+credential),
 		"",
 		zeroTheme.faint.Render("Press Enter to save and start using this provider."),
 	)
@@ -1587,6 +1768,23 @@ func providerWizardProfile(provider providercatalog.Descriptor, model string, ap
 		profile.APIKeyEnv = env
 	}
 	return profile
+}
+
+// providerWizardCLIProfile builds a keyless profile for the CLI connect method:
+// AuthCLI names the harness whose local login this profile reuses. APIKey and
+// APIKeyEnv are deliberately left unset — providerWizardProfile would populate
+// APIKeyEnv for a RequiresAuth descriptor (e.g. Anthropic's ANTHROPIC_API_KEY),
+// and providerWizardRuntimeProfile would then read an ambient env var at build
+// time, silently displacing the CLI login this profile exists to use.
+func providerWizardCLIProfile(harness agentcli.Harness, provider providercatalog.Descriptor, model string) config.ProviderProfile {
+	return config.ProviderProfile{
+		Name:         harness.ID,
+		ProviderKind: providerWizardProviderKind(provider),
+		CatalogID:    provider.ID,
+		APIFormat:    providerWizardAPIFormat(provider),
+		Model:        firstProviderDisplayValue(model, provider.DefaultModel),
+		AuthCLI:      harness.ID,
+	}
 }
 
 func providerWizardEndpointError(value string) string {

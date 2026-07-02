@@ -86,6 +86,15 @@ type Options struct {
 	// is preferred over APIKey; a nil resolver (or one that yields ok=false) uses
 	// the API key. See providerio.SendWithAuthRetry.
 	OAuthResolver providerio.TokenResolver
+	// ClaudeCodeIdentity marks this provider as authenticating with a Claude
+	// Code subscription OAuth token (the claude CLI login). Anthropic only
+	// serves those tokens to requests that identify as Claude Code: the
+	// `claude-code-20250219` beta must be present AND the first system block
+	// must be exactly claudeCodeSystemPrompt. Without both, the API returns a
+	// 429 rate_limit_error regardless of the account's real quota. Enabling
+	// this makes the provider inject both. It is meaningless (and unset) for
+	// ordinary x-api-key auth.
+	ClaudeCodeIdentity bool
 	// StreamIdleTimeout aborts the stream if no data arrives for this long.
 	// When unset, Zero uses providerio.ResolveStreamIdleTimeout — the
 	// ZERO_STREAM_IDLE_TIMEOUT override or providerio.DefaultStreamIdleTimeout.
@@ -94,21 +103,32 @@ type Options struct {
 
 // Provider streams completions from Anthropic's Messages API.
 type Provider struct {
-	apiKey            string
-	baseURL           string
-	model             string
-	maxTokens         int
-	version           string
-	beta              string
-	authHeader        string
-	authScheme        string
-	authHeaderValue   string
-	customHeaders     map[string]string
-	oauthResolver     providerio.TokenResolver
-	httpClient        *http.Client
-	userAgent         string
-	streamIdleTimeout time.Duration
+	apiKey             string
+	baseURL            string
+	model              string
+	maxTokens          int
+	version            string
+	beta               string
+	authHeader         string
+	authScheme         string
+	authHeaderValue    string
+	customHeaders      map[string]string
+	oauthResolver      providerio.TokenResolver
+	claudeCodeIdentity bool
+	httpClient         *http.Client
+	userAgent          string
+	streamIdleTimeout  time.Duration
 }
+
+// claudeCodeSystemPrompt is the exact first system block Anthropic requires on
+// requests authenticated with a Claude Code subscription OAuth token. It is a
+// verbatim identity string, not instructions; zero's real system prompt
+// follows it as a second block.
+const claudeCodeSystemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
+
+// claudeCodeBeta is the beta flag that pairs with claudeCodeSystemPrompt to
+// unlock a subscription OAuth token.
+const claudeCodeBeta = "claude-code-20250219"
 
 // New creates an Anthropic provider.
 func New(options Options) (*Provider, error) {
@@ -128,21 +148,26 @@ func New(options Options) (*Provider, error) {
 	if version == "" {
 		version = defaultVersion
 	}
+	beta := strings.TrimSpace(options.Beta)
+	if options.ClaudeCodeIdentity {
+		beta = appendBeta(beta, claudeCodeBeta)
+	}
 	return &Provider{
-		apiKey:            options.APIKey,
-		baseURL:           baseURL,
-		model:             model,
-		maxTokens:         maxTokens,
-		version:           version,
-		beta:              strings.TrimSpace(options.Beta),
-		authHeader:        strings.TrimSpace(options.AuthHeader),
-		authScheme:        strings.TrimSpace(options.AuthScheme),
-		authHeaderValue:   strings.TrimSpace(options.AuthHeaderValue),
-		customHeaders:     providerio.CopyHeaders(options.CustomHeaders),
-		oauthResolver:     options.OAuthResolver,
-		httpClient:        providerio.HTTPClient(options.HTTPClient),
-		userAgent:         options.UserAgent,
-		streamIdleTimeout: providerio.ResolveStreamIdleTimeout(options.StreamIdleTimeout),
+		apiKey:             options.APIKey,
+		baseURL:            baseURL,
+		model:              model,
+		maxTokens:          maxTokens,
+		version:            version,
+		beta:               beta,
+		authHeader:         strings.TrimSpace(options.AuthHeader),
+		authScheme:         strings.TrimSpace(options.AuthScheme),
+		authHeaderValue:    strings.TrimSpace(options.AuthHeaderValue),
+		customHeaders:      providerio.CopyHeaders(options.CustomHeaders),
+		oauthResolver:      options.OAuthResolver,
+		claudeCodeIdentity: options.ClaudeCodeIdentity,
+		httpClient:         providerio.HTTPClient(options.HTTPClient),
+		userAgent:          options.UserAgent,
+		streamIdleTimeout:  providerio.ResolveStreamIdleTimeout(options.StreamIdleTimeout),
 	}, nil
 }
 
@@ -358,6 +383,21 @@ func (provider *Provider) emitHTTPError(ctx context.Context, response *http.Resp
 	})
 }
 
+// appendBeta adds one beta flag to a comma-separated anthropic-beta value,
+// preserving existing entries and avoiding a duplicate.
+func appendBeta(existing, add string) string {
+	existing = strings.TrimSpace(existing)
+	if existing == "" {
+		return add
+	}
+	for _, part := range strings.Split(existing, ",") {
+		if strings.TrimSpace(part) == add {
+			return existing
+		}
+	}
+	return existing + "," + add
+}
+
 func (provider *Provider) anthropicRequest(request zeroruntime.CompletionRequest) (messagesRequest, error) {
 	system, messages, err := mapMessages(request.Messages)
 	if err != nil {
@@ -387,12 +427,26 @@ func (provider *Provider) anthropicRequest(request zeroruntime.CompletionRequest
 	// whole system prompt; the breakpoint on the last tool covers all tool defs.
 	// Cache hits show up as cache_read_input_tokens in the usage. Non-caching
 	// providers ignore the field, and Anthropic accepts an empty/omitted system.
+	systemBlocks := []systemBlock{}
+	// A Claude Code OAuth token is only served when the FIRST system block is
+	// exactly the Claude Code identity string (see claudeCodeSystemPrompt); it
+	// leads, and zero's own system prompt follows as a second block.
+	if provider.claudeCodeIdentity {
+		systemBlocks = append(systemBlocks, systemBlock{Type: "text", Text: claudeCodeSystemPrompt})
+	}
 	if strings.TrimSpace(system) != "" {
-		mapped.System = []systemBlock{{
+		systemBlocks = append(systemBlocks, systemBlock{
 			Type:         "text",
 			Text:         system,
 			CacheControl: &cacheControl{Type: cacheEphemeral},
-		}}
+		})
+	} else if len(systemBlocks) > 0 {
+		// No zero system prompt, but the identity block still needs a cache
+		// breakpoint to be a well-formed cacheable system array.
+		systemBlocks[len(systemBlocks)-1].CacheControl = &cacheControl{Type: cacheEphemeral}
+	}
+	if len(systemBlocks) > 0 {
+		mapped.System = systemBlocks
 	}
 	if len(request.Tools) > 0 {
 		mapped.Tools = make([]anthropicTool, 0, len(request.Tools))

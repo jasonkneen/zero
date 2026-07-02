@@ -259,6 +259,16 @@ func saveSetupProvider(deps appDeps, selection tui.SetupSelection, options setup
 		profile.APIKey = apiKey
 		profile.APIKeyEnv = ""
 	}
+	// A CLI-method selection reuses a detected agent CLI's own login: clear
+	// whatever providerProfileForAdd auto-filled into APIKeyEnv (it defaults to
+	// the catalog's first AuthEnvVars entry, e.g. ANTHROPIC_API_KEY for the
+	// anthropic descriptor) so this profile never silently picks up an ambient
+	// env var instead of the CLI login it was created to use.
+	if authCLI := strings.TrimSpace(selection.AuthCLI); authCLI != "" {
+		profile.AuthCLI = authCLI
+		profile.APIKey = ""
+		profile.APIKeyEnv = ""
+	}
 	configPath, err := deps.userConfigPath()
 	if err != nil {
 		return tui.SetupResult{}, err

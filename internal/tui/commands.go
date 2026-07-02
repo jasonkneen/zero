@@ -41,6 +41,7 @@ const (
 	commandAddDir
 	commandSelfCorrect
 	commandTurns
+	commandOnlyBash
 	commandUnknown
 )
 
@@ -248,6 +249,13 @@ var commandDefinitions = []commandDefinition{
 		group:       commandGroupSession,
 		description: "Show or set the per-run tool-turn budget for this session (raise it for long multi-step tasks).",
 		kind:        commandTurns,
+	},
+	{
+		name:        "/onlybash",
+		usage:       "/onlybash [on|off|status]",
+		group:       commandGroupRuntime,
+		description: "Restrict the tool surface to bash + skill only, with tool_search disabled so no other tool can be added back. Bare form toggles.",
+		kind:        commandOnlyBash,
 	},
 	{
 		name:        "/help",

@@ -55,7 +55,7 @@ func TestProviderWizardMethodChooserOAuthPath(t *testing.T) {
 func TestProviderWizardMethodChooserBrowsePath(t *testing.T) {
 	m := mouseTestModel()
 	m.providerWizard = m.newProviderWizard()
-	m.providerWizard.selectedMethod = len(providerWizardMethodOptions()) - 1 // "browse / API key"
+	m.providerWizard.selectedMethod = len(m.providerWizard.methodOptions()) - 1 // "browse / API key"
 	next, _ := m.advanceProviderWizard()
 	w := next.providerWizard
 	if w.step != providerWizardStepProvider || w.oauthMode {

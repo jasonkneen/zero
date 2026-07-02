@@ -1000,6 +1000,34 @@ func TestRunRejectsToolCallsOutsideEnabledList(t *testing.T) {
 	}
 }
 
+// TestToolAllowedByFiltersOnlyBashBlocksDelegation locks the invariant the
+// TUI's /onlybash mode (and the modelregistry "onlybash" preset) relies on:
+// EnabledTools=[bash, skill] is a strict allowlist, so any tool not on it —
+// including "Task", the specialist/subagent delegation tool — is rejected.
+// Onlybash therefore can't spawn a child that escapes the restricted surface;
+// there is no child to propagate the filter to in the first place.
+func TestToolAllowedByFiltersOnlyBashBlocksDelegation(t *testing.T) {
+	onlyBashEnabled := []string{"bash", "skill"}
+	onlyBashDisabled := []string{tools.ToolSearchToolName}
+
+	if ToolAllowedByFilters("Task", onlyBashEnabled, onlyBashDisabled) {
+		t.Fatal("Task should not be allowed under onlybash's EnabledTools allowlist")
+	}
+	if !ToolAllowedByFilters("bash", onlyBashEnabled, onlyBashDisabled) {
+		t.Fatal("bash should be allowed under onlybash")
+	}
+	if !ToolAllowedByFilters("skill", onlyBashEnabled, onlyBashDisabled) {
+		t.Fatal("skill should be allowed under onlybash")
+	}
+	// tool_search is exempted from allowlist rejection (executeToolCall), so the
+	// filter check alone would let it through; the explicit DisabledTools entry
+	// is what actually blocks it. ToolAllowedByFilters reflects that: it denies
+	// tool_search here purely via the DisabledTools branch.
+	if ToolAllowedByFilters(tools.ToolSearchToolName, onlyBashEnabled, onlyBashDisabled) {
+		t.Fatal("tool_search should be denied by onlybash's DisabledTools")
+	}
+}
+
 func TestRunExecutesToolCallThroughRegistry(t *testing.T) {
 	root := t.TempDir()
 	writeAgentTestFile(t, filepath.Join(root, "notes.txt"), "alpha\nbeta\n")

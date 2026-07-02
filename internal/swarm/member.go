@@ -23,6 +23,15 @@ type MemberSpec struct {
 	Model          string // resolved (never the "inherit" sentinel)
 	PermissionMode string
 	SystemPrompt   string
+	// Harness, when set, is an agentcli.Harness id ("claude", "codex", ...): the
+	// member runs that external agent CLI instead of self-exec zero. Empty means
+	// the default self-exec behavior. Swarm itself never imports agentcli —
+	// validation happens where the launcher builds the specialist manifest.
+	Harness string
+	// Provider pins a config provider profile name for this member's child
+	// process (self-exec zero only; meaningless alongside Harness). Passed
+	// through unvalidated, same as specialist.Metadata.Provider.
+	Provider string
 }
 
 // MemberResult is what a finished member returns.

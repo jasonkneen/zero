@@ -114,6 +114,10 @@ type SetupSelection struct {
 	BaseURL   string
 	Model     string
 	APIKey    string
+	// AuthCLI names a detected agent-CLI harness (e.g. "claude", "codex") whose
+	// local login this selection reuses instead of an API key. Empty for the
+	// key/OAuth connect methods.
+	AuthCLI string
 }
 
 // SetupResult describes a completed setup write.

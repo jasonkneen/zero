@@ -100,45 +100,58 @@ type model struct {
 	titledSessions map[string]bool
 	// retitle* drive the sequential /retitle backfill: queued session ids still
 	// awaiting a title, whether a backfill is running, and its progress counters.
-	retitleQueue          []string
-	retitleActive         bool
-	retitleTotal          int
-	retitleDone           int
-	retitleOK             int
-	usageTracker          *usage.Tracker
-	sessionCompactor      SessionCompactor
-	prService             *PrService
-	prState               PrState
-	prWatcherStop         func()
-	runtimeMessageSink    func(tea.Msg)
-	agentOptions          agent.Options
-	notifier              *notify.Notifier
-	permissionMode        agent.PermissionMode
-	selfCorrectTests      bool
-	reasoningEffort       modelregistry.ReasoningEffort
-	responseStyle         string
-	themeMode             themeMode // palette preference: auto (default), dark, light
-	hasDarkBg             bool      // last terminal background-detection result (auto mode)
-	userAgent             string
-	compactRequests       int
-	compactInFlight       bool
-	compactFrame          int
-	lastCompactResult     *CompactResult
-	lastCompactError      string
-	unpricedRequests      int
-	unpricedTokens        int
-	lastUsage             usage.Normalized
-	lastUsageSeen         bool
-	transcript            []transcriptRow
-	transcriptDetailed    bool
-	helpOverlay           bool // the `?` keyboard-shortcut overlay is open
-	transcriptBodyHeights *transcriptBodyHeightCache
-	input                 textinput.Model
-	composer              composerState
-	composerActive        bool
-	composerCursorVisible bool
-	composerPastePreviews []composerPastePreview
-	composerSelection     composerSelectionState
+	retitleQueue       []string
+	retitleActive      bool
+	retitleTotal       int
+	retitleDone        int
+	retitleOK          int
+	usageTracker       *usage.Tracker
+	sessionCompactor   SessionCompactor
+	prService          *PrService
+	prState            PrState
+	prWatcherStop      func()
+	runtimeMessageSink func(tea.Msg)
+	agentOptions       agent.Options
+	notifier           *notify.Notifier
+	permissionMode     agent.PermissionMode
+	selfCorrectTests   bool
+	// onlyBashActive is /onlybash's toggle state: while true, m.agentOptions
+	// carries the onlybash tool filter (EnabledTools=[bash,skill],
+	// DisabledTools=[tool_search]) so every subsequent run in this session is
+	// restricted to it. onlyBashStashedEnabledTools/onlyBashStashedDisabledTools
+	// hold whatever operator-configured filters were on m.agentOptions the
+	// moment the mode was turned on, so turning it back off restores them
+	// exactly instead of clobbering them with onlybash's own lists or an empty
+	// filter. The stash is only captured on an inactive->active transition (see
+	// handleOnlyBashCommand) — re-enabling while already active must NOT
+	// re-stash onlybash's own filter as if it were the operator's.
+	onlyBashActive               bool
+	onlyBashStashedEnabledTools  []string
+	onlyBashStashedDisabledTools []string
+	reasoningEffort              modelregistry.ReasoningEffort
+	responseStyle                string
+	themeMode                    themeMode // palette preference: auto (default), dark, light
+	hasDarkBg                    bool      // last terminal background-detection result (auto mode)
+	userAgent                    string
+	compactRequests              int
+	compactInFlight              bool
+	compactFrame                 int
+	lastCompactResult            *CompactResult
+	lastCompactError             string
+	unpricedRequests             int
+	unpricedTokens               int
+	lastUsage                    usage.Normalized
+	lastUsageSeen                bool
+	transcript                   []transcriptRow
+	transcriptDetailed           bool
+	helpOverlay                  bool // the `?` keyboard-shortcut overlay is open
+	transcriptBodyHeights        *transcriptBodyHeightCache
+	input                        textinput.Model
+	composer                     composerState
+	composerActive               bool
+	composerCursorVisible        bool
+	composerPastePreviews        []composerPastePreview
+	composerSelection            composerSelectionState
 	// plan holds the sticky plan panel state (steps, expansion, timings)
 	// synced from the update_plan tool. See plan_panel.go.
 	plan            planPanelState
@@ -3765,6 +3778,11 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 		}
 		text := ""
 		m, text = m.handleTurnsCommand(command.text)
+		m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: text})
+		return m, nil
+	case commandOnlyBash:
+		text := ""
+		m, text = m.handleOnlyBashCommand(command.text)
 		m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: text})
 		return m, nil
 	case commandTheme:

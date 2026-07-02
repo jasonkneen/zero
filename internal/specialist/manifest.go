@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/modelregistry"
 )
 
@@ -29,6 +30,19 @@ type Metadata struct {
 	Model           string   `json:"model,omitempty"`
 	ReasoningEffort string   `json:"reasoningEffort,omitempty"`
 	Tools           []string `json:"tools,omitempty"`
+	// Harness, when set, is an agentcli.Harness id ("claude", "codex", ...): the
+	// specialist runs that external agent CLI instead of self-exec zero. Empty
+	// means the default self-exec behavior.
+	Harness string `json:"harness,omitempty"`
+	// Provider pins a config provider profile name for this specialist's child
+	// process via the ZERO_PROVIDER env var. Only meaningful for a self-exec zero
+	// child (Harness empty); the profile name is passed through unvalidated, so
+	// an unknown profile surfaces as the child's own resolver error.
+	Provider string `json:"provider,omitempty"`
+	// HarnessArgs are extra argv appended after the harness's own PrintArgs, for
+	// harness-specific flags (e.g. a model override). Only meaningful when
+	// Harness is set.
+	HarnessArgs []string `json:"harnessArgs,omitempty"`
 }
 
 type Manifest struct {
@@ -49,6 +63,8 @@ type Summary struct {
 	ReasoningEffort string   `json:"reasoningEffort,omitempty"`
 	Tools           []string `json:"tools,omitempty"`
 	ResolvedTools   []string `json:"resolvedTools,omitempty"`
+	Harness         string   `json:"harness,omitempty"`
+	Provider        string   `json:"provider,omitempty"`
 	Location        Location `json:"location"`
 	FilePath        string   `json:"filePath"`
 	Warnings        []string `json:"warnings,omitempty"`
@@ -78,6 +94,9 @@ var knownMetadataKeys = map[string]bool{
 	"model":           true,
 	"reasoningEffort": true,
 	"tools":           true,
+	"harness":         true,
+	"provider":        true,
+	"harnessArgs":     true,
 }
 
 var toolCategories = map[string][]string{
@@ -187,6 +206,8 @@ func Summaries(manifests []Manifest) []Summary {
 			ReasoningEffort: manifest.Metadata.ReasoningEffort,
 			Tools:           append([]string(nil), manifest.Metadata.Tools...),
 			ResolvedTools:   append([]string(nil), manifest.ResolvedTools...),
+			Harness:         manifest.Metadata.Harness,
+			Provider:        manifest.Metadata.Provider,
 			Location:        manifest.Location,
 			FilePath:        manifest.FilePath,
 			Warnings:        append([]string(nil), manifest.Warnings...),
@@ -234,6 +255,8 @@ func Validate(manifest *Manifest) error {
 	manifest.Metadata.Extends = strings.TrimSpace(manifest.Metadata.Extends)
 	manifest.Metadata.Model = strings.TrimSpace(manifest.Metadata.Model)
 	manifest.Metadata.ReasoningEffort = strings.TrimSpace(manifest.Metadata.ReasoningEffort)
+	manifest.Metadata.Harness = strings.TrimSpace(manifest.Metadata.Harness)
+	manifest.Metadata.Provider = strings.TrimSpace(manifest.Metadata.Provider)
 	if manifest.Metadata.Name == "" {
 		return fmt.Errorf("specialist name is required")
 	}
@@ -264,12 +287,31 @@ func Validate(manifest *Manifest) error {
 		}
 		manifest.Metadata.ReasoningEffort = effort
 	}
+	if manifest.Metadata.Harness != "" {
+		normalized := strings.ToLower(manifest.Metadata.Harness)
+		if _, ok := agentcli.Lookup(normalized); !ok {
+			return fmt.Errorf("specialist %q references unknown harness %q: available harnesses: %s", manifest.Metadata.Name, manifest.Metadata.Harness, availableHarnessIDs())
+		}
+		manifest.Metadata.Harness = normalized
+	}
 	resolved, err := ResolveTools(manifest.Metadata.Tools)
 	if err != nil {
 		return fmt.Errorf("specialist %q: %w", manifest.Metadata.Name, err)
 	}
 	manifest.ResolvedTools = resolved
 	return nil
+}
+
+// availableHarnessIDs renders the known agentcli harness ids for a corrective
+// "unknown harness" error, mirroring availableSpecialistList's approach for
+// specialist names.
+func availableHarnessIDs() string {
+	harnesses := agentcli.Harnesses()
+	ids := make([]string, 0, len(harnesses))
+	for _, harness := range harnesses {
+		ids = append(ids, harness.ID)
+	}
+	return strings.Join(ids, ", ")
 }
 
 func ResolveTools(selection []string) ([]string, error) {
@@ -386,13 +428,23 @@ func manifestFromRaw(raw map[string]any) (Manifest, error) {
 				return Manifest{}, fmt.Errorf("tools must be an array")
 			}
 			metadata.Tools = values
+		case "harness":
+			metadata.Harness = stringValue(value)
+		case "provider":
+			metadata.Provider = stringValue(value)
+		case "harnessArgs":
+			values, ok := value.([]string)
+			if !ok {
+				return Manifest{}, fmt.Errorf("harnessArgs must be an array")
+			}
+			metadata.HarnessArgs = values
 		}
 	}
 	return Manifest{Metadata: metadata}, nil
 }
 
 func isListKey(key string) bool {
-	return key == "tools"
+	return key == "tools" || key == "harnessArgs"
 }
 
 func parseBlockList(lines []string, start int) ([]string, int, error) {
@@ -582,6 +634,15 @@ func mergeExtends(base Manifest, child Manifest) Manifest {
 	}
 	if merged.Metadata.ReasoningEffort == "" {
 		merged.Metadata.ReasoningEffort = base.Metadata.ReasoningEffort
+	}
+	if merged.Metadata.Harness == "" {
+		merged.Metadata.Harness = base.Metadata.Harness
+	}
+	if merged.Metadata.Provider == "" {
+		merged.Metadata.Provider = base.Metadata.Provider
+	}
+	if len(merged.Metadata.HarnessArgs) == 0 {
+		merged.Metadata.HarnessArgs = append([]string(nil), base.Metadata.HarnessArgs...)
 	}
 	if len(merged.Metadata.Tools) == 0 {
 		merged.Metadata.Tools = append([]string(nil), base.Metadata.Tools...)

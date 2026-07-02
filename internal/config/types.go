@@ -32,7 +32,14 @@ type ProviderProfile struct {
 	// credential store (internal/credstore), not inline in APIKey. The effective
 	// key is loaded from the store at provider-build time; config.json holds only
 	// this marker, never the secret.
-	APIKeyStored    bool              `json:"apiKeyStored,omitempty"`
+	APIKeyStored bool `json:"apiKeyStored,omitempty"`
+	// AuthCLI names an agentcli harness (e.g. "claude", "codex") whose locally
+	// stored login this profile reuses instead of an API key. Set by the
+	// provider wizard's CLI method; the provider factory resolves live
+	// credentials from the harness at build/refresh time (see
+	// internal/providers/agentclicreds.go). Mutually exclusive with APIKey /
+	// APIKeyEnv in practice, though nothing enforces that at the type level.
+	AuthCLI         string            `json:"authCLI,omitempty"`
 	APIFormat       string            `json:"apiFormat,omitempty"`
 	AuthHeader      string            `json:"authHeader,omitempty"`
 	AuthScheme      string            `json:"authScheme,omitempty"`
@@ -51,6 +58,7 @@ func HasProviderProfile(profile ProviderProfile) bool {
 		strings.TrimSpace(profile.BaseURL) != "" ||
 		strings.TrimSpace(profile.APIKey) != "" ||
 		strings.TrimSpace(profile.APIKeyEnv) != "" ||
+		strings.TrimSpace(profile.AuthCLI) != "" ||
 		strings.TrimSpace(profile.APIFormat) != "" ||
 		strings.TrimSpace(profile.AuthHeader) != "" ||
 		strings.TrimSpace(profile.AuthScheme) != "" ||
@@ -496,6 +504,8 @@ func (profile *ProviderProfile) UnmarshalJSON(data []byte) error {
 		APIKeyEnvSnake       string            `json:"api_key_env"`
 		APIKeyStored         bool              `json:"apiKeyStored"`
 		APIKeyStoredSnake    bool              `json:"api_key_stored"`
+		AuthCLI              string            `json:"authCLI"`
+		AuthCLISnake         string            `json:"auth_cli"`
 		APIFormat            string            `json:"apiFormat"`
 		APIFormatSnake       string            `json:"api_format"`
 		AuthHeader           string            `json:"authHeader"`
@@ -526,6 +536,7 @@ func (profile *ProviderProfile) UnmarshalJSON(data []byte) error {
 	profile.APIKey = firstNonEmpty(raw.APIKey, raw.APIKeySnake)
 	profile.APIKeyEnv = strings.TrimSpace(firstNonEmpty(raw.APIKeyEnv, raw.APIKeyEnvSnake))
 	profile.APIKeyStored = raw.APIKeyStored || raw.APIKeyStoredSnake
+	profile.AuthCLI = strings.TrimSpace(firstNonEmpty(raw.AuthCLI, raw.AuthCLISnake))
 	profile.APIFormat = strings.TrimSpace(firstNonEmpty(raw.APIFormat, raw.APIFormatSnake))
 	profile.AuthHeader = strings.TrimSpace(firstNonEmpty(raw.AuthHeader, raw.AuthHeaderSnake))
 	profile.AuthScheme = strings.TrimSpace(firstNonEmpty(raw.AuthScheme, raw.AuthSchemeSnake))

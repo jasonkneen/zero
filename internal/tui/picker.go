@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/modelregistry"
 	"github.com/Gitlawb/zero/internal/providercatalog"
@@ -242,13 +243,24 @@ func (m model) descriptorForProfile(profile config.ProviderProfile) (providercat
 }
 
 func modelPickerProviderGroup(profile config.ProviderProfile, descriptor providercatalog.Descriptor, hasDescriptor bool) string {
+	base := "Provider"
 	if hasDescriptor && strings.TrimSpace(descriptor.Name) != "" {
-		return descriptor.Name
+		base = descriptor.Name
+	} else if name := strings.TrimSpace(profile.Name); name != "" {
+		base = name
 	}
-	if name := strings.TrimSpace(profile.Name); name != "" {
-		return name
+	// A CLI-authenticated profile shares its catalog descriptor with any plain
+	// API-key profile for the same provider, so an unsuffixed group label would
+	// (a) hide which login the models run on and (b) collide in the picker's
+	// per-group dedup, dropping one of the two profiles from the list entirely.
+	if cli := strings.TrimSpace(profile.AuthCLI); cli != "" {
+		display := cli
+		if harness, ok := agentcli.Lookup(cli); ok {
+			display = harness.DisplayName
+		}
+		return base + " · via " + display
 	}
-	return "Provider"
+	return base
 }
 
 func (m model) openModelPicker() (model, tea.Cmd) {
@@ -612,6 +624,13 @@ func (m model) normalizeProfileForProvider(provider providercatalog.Descriptor) 
 		genericProviderCatalogID(profile.CatalogID) ||
 		strings.TrimSpace(profile.Name) == "" ||
 		strings.TrimSpace(profile.CatalogID) == ""
+	// A CLI-authenticated profile's NAME is its credential binding: renaming it
+	// to the catalog id makes persistence miss the real profile ("provider
+	// \"anthropic\" not found") and the APIKeyEnv autofill below would displace
+	// the CLI login with an ambient env key. Keep its identity untouched.
+	if strings.TrimSpace(profile.AuthCLI) != "" {
+		normalizeIdentity = false
+	}
 	if normalizeIdentity {
 		profile.Name = provider.ID
 		profile.CatalogID = provider.ID
@@ -625,11 +644,16 @@ func (m model) normalizeProfileForProvider(provider providercatalog.Descriptor) 
 	if strings.TrimSpace(profile.APIFormat) == "" {
 		profile.APIFormat = providerWizardAPIFormat(provider)
 	}
-	if len(provider.AuthEnvVars) > 0 && (strings.TrimSpace(profile.APIKeyEnv) == "" || normalizeIdentity) {
-		profile.APIKeyEnv = provider.AuthEnvVars[0]
-	}
-	if strings.TrimSpace(profile.APIKey) == "" && strings.TrimSpace(profile.APIKeyEnv) != "" {
-		profile.APIKey = strings.TrimSpace(os.Getenv(profile.APIKeyEnv))
+	// CLI-auth profiles stay keyless by design (see providerWizardCLIProfile):
+	// filling APIKeyEnv/APIKey here would route requests to an ambient env key
+	// instead of the CLI login the user chose.
+	if strings.TrimSpace(profile.AuthCLI) == "" {
+		if len(provider.AuthEnvVars) > 0 && (strings.TrimSpace(profile.APIKeyEnv) == "" || normalizeIdentity) {
+			profile.APIKeyEnv = provider.AuthEnvVars[0]
+		}
+		if strings.TrimSpace(profile.APIKey) == "" && strings.TrimSpace(profile.APIKeyEnv) != "" {
+			profile.APIKey = strings.TrimSpace(os.Getenv(profile.APIKeyEnv))
+		}
 	}
 	return profile
 }

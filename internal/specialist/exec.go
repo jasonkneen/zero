@@ -33,6 +33,12 @@ type NewSessionIDFunc func() (string, error)
 type WritePromptFileFunc func(prompt string) (string, error)
 type LoadFunc func(LoadOptions) (LoadResult, error)
 type RunChildFunc func(ctx context.Context, binaryPath string, args []string, progress func(streamjson.Event)) (ChildRunResult, error)
+
+// zeroProviderEnvVar mirrors config.ActiveProviderEnv ("ZERO_PROVIDER") without
+// importing internal/config: a per-child provider override just needs the env
+// var name a self-exec zero child reads at startup to resolve its profile.
+const zeroProviderEnvVar = "ZERO_PROVIDER"
+
 type LaunchBackgroundFunc func(binaryPath string, args []string, outputFile string, onExit func(exitCode int)) (int, error)
 type BackgroundManagerFunc func() (*background.Manager, error)
 
@@ -327,6 +333,16 @@ func (executor Executor) runFresh(ctx context.Context, params TaskParameters, op
 	if err != nil {
 		return ExecResult{}, err
 	}
+	if harnessID := strings.TrimSpace(manifest.Metadata.Harness); harnessID != "" {
+		// A harness-backed specialist drives an external agent CLI (claude,
+		// codex, ...) instead of self-exec zero; it has no background-launch
+		// path (runBackground assumes a self-exec zero child it can register
+		// with background.Manager and resume via zero's own session store).
+		if params.RunInBackground {
+			return ExecResult{}, fmt.Errorf("specialist %q runs on harness %q, which cannot run in background", manifest.Metadata.Name, harnessID)
+		}
+		return executor.runHarness(ctx, manifest, params, options)
+	}
 	built, err := executor.BuildArgs(BuildArgsInput{
 		Manifest:              manifest,
 		Prompt:                params.Prompt,
@@ -565,7 +581,7 @@ func (executor Executor) runBuiltArgs(ctx context.Context, built BuildArgsResult
 		Background:      false,
 	}
 	executor.recordSpecialistStart(accounting)
-	run, err := executor.runChild(ctx, binaryPath, built.Args, progress)
+	run, err := executor.runChild(ctx, binaryPath, built.Args, childProviderEnv(manifest.Metadata.Provider), progress)
 	if err != nil {
 		exitCode := run.exitCodeOr(-1)
 		summary := SummarizeStream(run.Events, exitCode)
@@ -635,11 +651,27 @@ func (executor Executor) binaryPath() (string, error) {
 	return path, nil
 }
 
-func (executor Executor) runChild(ctx context.Context, binaryPath string, args []string, progress func(streamjson.Event)) (ChildRunResult, error) {
+func (executor Executor) runChild(ctx context.Context, binaryPath string, args []string, env []string, progress func(streamjson.Event)) (ChildRunResult, error) {
 	if executor.RunChild != nil {
+		// The injectable RunChildFunc seam predates per-child env overrides and
+		// only exercises argv/progress in tests; env only matters on the real
+		// child-process path below, which every production caller uses.
 		return executor.RunChild(ctx, binaryPath, append([]string(nil), args...), progress)
 	}
-	return runChildProcess(ctx, binaryPath, args, progress)
+	return runChildProcess(ctx, binaryPath, args, env, progress)
+}
+
+// childProviderEnv returns the child process environment when the specialist
+// manifest pins a provider profile: the parent's environment plus a
+// ZERO_PROVIDER override, so a self-exec zero child resolves that profile
+// instead of inheriting the orchestrator's active provider. Returns nil
+// (inherit the process environment unchanged) when no provider is pinned.
+func childProviderEnv(provider string) []string {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return nil
+	}
+	return append(os.Environ(), zeroProviderEnvVar+"="+provider)
 }
 
 func (executor Executor) launchBackground(binaryPath string, args []string, outputFile string, onExit func(exitCode int)) (int, error) {
@@ -768,12 +800,59 @@ func cleanupPromptFile(promptFile string) {
 	_ = os.Remove(promptFile)
 }
 
-func runChildProcess(ctx context.Context, binaryPath string, args []string, progress func(streamjson.Event)) (ChildRunResult, error) {
+// childDecoder turns one child process's stdout into stream-json events. It is
+// the seam that lets runChildWithDecoder's process-management skeleton (start,
+// stream stdout, harden, wait, capture exit/signal) be shared between the
+// self-exec zero child (zeroLineDecoder, each line already IS a
+// streamjson.Event) and external harness-CLI children (harness_decode.go,
+// which translate a foreign stdout format into zero's event shape).
+type childDecoder interface {
+	// decodeLine turns one non-empty line of child stdout into zero or more
+	// stream-json events, in emission order.
+	decodeLine(line string) []streamjson.Event
+	// finish is called once after the child's stdout closes, with the process's
+	// exit code, so a decoder that only knows its final answer at stream end
+	// (e.g. "last message before task_complete", or raw accumulated text) can
+	// emit its closing events (typically an EventFinal).
+	finish(exitCode int) []streamjson.Event
+}
+
+// zeroLineDecoder decodes a self-exec zero child's stream-json stdout: every
+// line is already one streamjson.Event. A malformed line becomes a recorded
+// EventError instead of aborting the run — ParseStream did the same.
+type zeroLineDecoder struct{}
+
+func (zeroLineDecoder) decodeLine(line string) []streamjson.Event {
+	var event streamjson.Event
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return []streamjson.Event{{Type: streamjson.EventError, Message: fmt.Sprintf("parse stream-json line: %v", err)}}
+	}
+	return []streamjson.Event{event}
+}
+
+func (zeroLineDecoder) finish(int) []streamjson.Event { return nil }
+
+func runChildProcess(ctx context.Context, binaryPath string, args []string, env []string, progress func(streamjson.Event)) (ChildRunResult, error) {
+	return runChildWithDecoder(ctx, binaryPath, args, env, "", zeroLineDecoder{}, progress)
+}
+
+// runChildWithDecoder drives one child subprocess to completion: process-group
+// hardening + group-kill on cancel/timeout (so a build/server/bash the child
+// forked dies with it instead of orphaning, M6), line-buffered stdout
+// streaming through decoder, and exit/signal capture. env, when non-empty,
+// replaces the inherited process environment; dir, when non-empty, sets the
+// child's working directory (a self-exec zero child instead receives its
+// workspace root via a "--cwd" argv flag, so runChildProcess always passes "").
+func runChildWithDecoder(ctx context.Context, binaryPath string, args []string, env []string, dir string, decoder childDecoder, progress func(streamjson.Event)) (ChildRunResult, error) {
 	var stderr bytes.Buffer
 	command := osexec.CommandContext(ctx, binaryPath, args...)
-	// Put the child in its own process group and group-kill on cancel/timeout, so a
-	// build/server/bash the sub-agent forked dies with it instead of orphaning (M6).
 	hardenSpecialistChild(command)
+	if len(env) > 0 {
+		command.Env = env
+	}
+	if dir != "" {
+		command.Dir = dir
+	}
 	command.Stderr = &stderr
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -783,23 +862,20 @@ func runChildProcess(ctx context.Context, binaryPath string, args []string, prog
 		return ChildRunResult{Stderr: stderr.String()}, fmt.Errorf("start specialist child: %w", err)
 	}
 	events := []streamjson.Event{}
+	emit := func(decoded []streamjson.Event) {
+		for _, event := range decoded {
+			events = append(events, event)
+			if progress != nil {
+				progress(event)
+			}
+		}
+	}
 	reader := bufio.NewReader(stdout)
 	for {
 		line, readErr := reader.ReadString('\n')
 		line = strings.TrimSpace(line)
 		if line != "" {
-			var event streamjson.Event
-			if err := json.Unmarshal([]byte(line), &event); err != nil {
-				// Surface parse errors instead of silently dropping lines —
-				// ParseStream did this too. Accumulate what we have and let
-				// the caller decide via the error.
-				events = append(events, streamjson.Event{Type: streamjson.EventError, Message: fmt.Sprintf("parse stream-json line: %v", err)})
-			} else {
-				events = append(events, event)
-				if progress != nil {
-					progress(event)
-				}
-			}
+			emit(decoder.decodeLine(line))
 		}
 		if readErr != nil {
 			if readErr != io.EOF {
@@ -825,6 +901,7 @@ func runChildProcess(ctx context.Context, binaryPath string, args []string, prog
 			return ChildRunResult{Events: events, Stderr: stderr.String(), ExitCode: -1, Started: started}, fmt.Errorf("run specialist child: %w", err)
 		}
 	}
+	emit(decoder.finish(exitCode))
 	return ChildRunResult{Events: events, Stderr: stderr.String(), ExitCode: exitCode, Signal: signalDesc, Started: started}, nil
 }
 

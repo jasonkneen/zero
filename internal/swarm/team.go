@@ -370,6 +370,8 @@ func (s *Swarm) buildSpec(pol Policy, memberID, taskID, team string, def Definit
 		Model:          resolveModel(pol, def),
 		PermissionMode: resolvePermissionMode(pol, def),
 		SystemPrompt:   prompt,
+		Harness:        def.Harness,
+		Provider:       def.Provider,
 	}
 }
 

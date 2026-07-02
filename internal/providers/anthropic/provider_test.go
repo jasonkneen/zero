@@ -583,3 +583,90 @@ func eventsOfType(events []zeroruntime.StreamEvent, eventType zeroruntime.Stream
 	}
 	return matching
 }
+
+// TestClaudeCodeIdentityInjectsPromptAndBeta verifies that a Claude Code
+// subscription OAuth provider sends what Anthropic requires to serve the token:
+// the claude-code beta flag and an exact identity system block leading the
+// system array, with zero's own system prompt following it.
+func TestClaudeCodeIdentityInjectsPromptAndBeta(t *testing.T) {
+	provider, err := New(Options{
+		Model:              "claude-sonnet-4-5",
+		Beta:               "oauth-2025-04-20",
+		ClaudeCodeIdentity: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !strings.Contains(provider.beta, "oauth-2025-04-20") || !strings.Contains(provider.beta, claudeCodeBeta) {
+		t.Fatalf("beta = %q, want both oauth and claude-code flags", provider.beta)
+	}
+
+	mapped, err := provider.anthropicRequest(zeroruntime.CompletionRequest{
+		Messages: []zeroruntime.Message{
+			{Role: zeroruntime.MessageRoleSystem, Content: "zero real system prompt"},
+			{Role: zeroruntime.MessageRoleUser, Content: "hi"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("anthropicRequest: %v", err)
+	}
+	blocks, ok := mapped.System.([]systemBlock)
+	if !ok || len(blocks) != 2 {
+		t.Fatalf("System = %#v, want 2 blocks", mapped.System)
+	}
+	if blocks[0].Text != claudeCodeSystemPrompt {
+		t.Fatalf("first block = %q, want the exact Claude Code identity line", blocks[0].Text)
+	}
+	if blocks[1].Text != "zero real system prompt" {
+		t.Fatalf("second block = %q, want zero's own system prompt", blocks[1].Text)
+	}
+}
+
+// TestClaudeCodeIdentityWithoutSystemPromptStillLeadsWithIdentity covers a run
+// with no zero system prompt: the identity block must still be present and
+// carry the cache breakpoint so the system array is well-formed.
+func TestClaudeCodeIdentityWithoutSystemPromptStillLeadsWithIdentity(t *testing.T) {
+	provider, err := New(Options{Model: "claude-sonnet-4-5", ClaudeCodeIdentity: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mapped, err := provider.anthropicRequest(zeroruntime.CompletionRequest{
+		Messages: []zeroruntime.Message{{Role: zeroruntime.MessageRoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("anthropicRequest: %v", err)
+	}
+	blocks, ok := mapped.System.([]systemBlock)
+	if !ok || len(blocks) != 1 || blocks[0].Text != claudeCodeSystemPrompt {
+		t.Fatalf("System = %#v, want a single identity block", mapped.System)
+	}
+	if blocks[0].CacheControl == nil {
+		t.Fatal("identity block missing cache breakpoint")
+	}
+}
+
+// TestNoClaudeCodeIdentityLeavesSystemUnchanged: an ordinary provider (x-api-key
+// or plain OAuth) must NOT inject the identity block or beta — that spoof is
+// only correct for a Claude Code subscription token.
+func TestNoClaudeCodeIdentityLeavesSystemUnchanged(t *testing.T) {
+	provider, err := New(Options{Model: "claude-sonnet-4-5"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if strings.Contains(provider.beta, claudeCodeBeta) {
+		t.Fatalf("beta = %q, want no claude-code flag for ordinary auth", provider.beta)
+	}
+	mapped, err := provider.anthropicRequest(zeroruntime.CompletionRequest{
+		Messages: []zeroruntime.Message{
+			{Role: zeroruntime.MessageRoleSystem, Content: "zero real system prompt"},
+			{Role: zeroruntime.MessageRoleUser, Content: "hi"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("anthropicRequest: %v", err)
+	}
+	blocks, ok := mapped.System.([]systemBlock)
+	if !ok || len(blocks) != 1 || blocks[0].Text != "zero real system prompt" {
+		t.Fatalf("System = %#v, want only zero's own system block", mapped.System)
+	}
+}

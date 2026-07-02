@@ -30,6 +30,29 @@ func TestLookupModeIsCaseInsensitiveAndTrimmed(t *testing.T) {
 	}
 }
 
+func TestLookupModeOnlyBash(t *testing.T) {
+	mode, ok := LookupMode("onlybash")
+	if !ok {
+		t.Fatal("LookupMode(\"onlybash\") = _, false; want a registered mode")
+	}
+	if mode.Model != "" || mode.Effort != "" || mode.MaxTurns != 0 {
+		t.Fatalf("onlybash mode should leave model/effort/turns untouched, got Model=%q Effort=%q MaxTurns=%d", mode.Model, mode.Effort, mode.MaxTurns)
+	}
+	wantEnabled := []string{"bash", "skill"}
+	if len(mode.EnabledTools) != len(wantEnabled) {
+		t.Fatalf("onlybash EnabledTools = %v; want %v", mode.EnabledTools, wantEnabled)
+	}
+	for index, name := range wantEnabled {
+		if mode.EnabledTools[index] != name {
+			t.Fatalf("onlybash EnabledTools = %v; want %v", mode.EnabledTools, wantEnabled)
+		}
+	}
+	wantDisabled := []string{"tool_search"}
+	if len(mode.DisabledTools) != len(wantDisabled) || mode.DisabledTools[0] != wantDisabled[0] {
+		t.Fatalf("onlybash DisabledTools = %v; want %v", mode.DisabledTools, wantDisabled)
+	}
+}
+
 func TestLookupModeUnknown(t *testing.T) {
 	for _, name := range []string{"", "   ", "turbo", "genius"} {
 		if _, ok := LookupMode(name); ok {
@@ -68,6 +91,11 @@ func TestEveryModeResolvesToRealRegistryModel(t *testing.T) {
 		t.Fatalf("DefaultRegistry: %v", err)
 	}
 	for _, mode := range Modes() {
+		if mode.Model == "" {
+			// Zero value means "leave the configured model untouched" (e.g.
+			// onlybash, which only narrows the tool surface) — nothing to resolve.
+			continue
+		}
 		entry, ok := registry.Resolve(mode.Model)
 		if !ok {
 			t.Fatalf("mode %q references model %q that does not resolve in the registry", mode.Name, mode.Model)

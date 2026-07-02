@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/browser"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/oauth"
@@ -49,19 +50,26 @@ type setupState struct {
 	oauthDevice           bool
 	deviceUserCode        string
 	deviceVerificationURI string
-	stage                 setupStage
-	err                   string
-	baseURL               string
-	name                  string
-	apiKey                textinput.Model
-	models                []providerWizardModel
-	modelIndex            int
-	modelQuery            string
-	modelForID            string
-	modelLoad             bool
-	modelErr              string
-	modelSrc              string
-	modelGen              uint64
+	// agentCLIDetections is captured ONCE at setup construction (newSetupState)
+	// rather than reprobed on every render/keystroke — see the identical note on
+	// providerWizardState.agentCLIDetections.
+	agentCLIDetections []agentcli.Detection
+	// cliHarness is set when the CLI connect method was chosen: setup skips the
+	// provider-chooser stage entirely (the row already names the provider).
+	cliHarness *agentcli.Harness
+	stage      setupStage
+	err        string
+	baseURL    string
+	name       string
+	apiKey     textinput.Model
+	models     []providerWizardModel
+	modelIndex int
+	modelQuery string
+	modelForID string
+	modelLoad  bool
+	modelErr   string
+	modelSrc   string
+	modelGen   uint64
 }
 
 // setupOAuthMsg carries the result of a first-run browser OAuth login.
@@ -113,14 +121,62 @@ func newSetupState(options SetupOptions) setupState {
 	// terminal bracketed paste (Paste: true) is the single paste path.
 	apiKey.KeyMap.Paste.SetEnabled(false)
 	apiKey.Focus()
-	return setupState{
-		visible:      options.Visible,
-		required:     options.Required,
-		configPath:   strings.TrimSpace(options.ConfigPath),
-		providers:    providers,
-		allProviders: providers,
-		apiKey:       apiKey,
+	detections := agentcli.Detect(agentcli.Deps{})
+	state := setupState{
+		visible:            options.Visible,
+		required:           options.Required,
+		configPath:         strings.TrimSpace(options.ConfigPath),
+		providers:          providers,
+		allProviders:       providers,
+		apiKey:             apiKey,
+		agentCLIDetections: detections,
 	}
+	// Don't open the method chooser with the cursor parked on an informational
+	// (unselectable) CLI row — mirrors providerWizardState's identical guard.
+	state.selectedMethod = firstSelectableMethodIndex(filterSetupMethodOptions(providerWizardMethodOptions(detections), providers))
+	return state
+}
+
+// filterSetupMethodOptions drops rows this setup run cannot honor: the OAuth
+// row when this setup's provider list has no OAuth-capable entry (so the user
+// can't pick OAuth and land on an empty provider list — pre-existing
+// behavior), and a selectable CLI row whose harness's catalog provider isn't
+// in this setup's allowed provider list. Informational (disabled) CLI rows are
+// never filtered — they don't commit to a provider, so they're always safe to
+// show.
+func filterSetupMethodOptions(options []providerWizardMethodOption, allProviders []SetupProviderOption) []providerWizardMethodOption {
+	hasOAuth := len(setupOAuthProviderOptions(allProviders)) > 0
+	filtered := make([]providerWizardMethodOption, 0, len(options))
+	for _, option := range options {
+		if option.kind == providerWizardMethodOAuth && !hasOAuth {
+			continue
+		}
+		if option.kind == providerWizardMethodCLI && !option.disabled && !setupProvidersInclude(allProviders, option.harness.CatalogID) {
+			continue
+		}
+		filtered = append(filtered, option)
+	}
+	return filtered
+}
+
+// setupProvidersInclude reports whether catalogID is one of the provider IDs
+// this setup run is allowed to offer.
+func setupProvidersInclude(providers []SetupProviderOption, catalogID string) bool {
+	_, ok := setupProviderForCatalogID(providers, catalogID)
+	return ok
+}
+
+// setupProviderForCatalogID finds the SetupProviderOption matching catalogID,
+// used to resolve a CLI method row's harness.CatalogID into the provider
+// option setup should offer directly (skipping the provider chooser).
+func setupProviderForCatalogID(providers []SetupProviderOption, catalogID string) (SetupProviderOption, bool) {
+	catalogID = strings.TrimSpace(catalogID)
+	for _, provider := range providers {
+		if strings.EqualFold(strings.TrimSpace(provider.ID), catalogID) {
+			return provider, true
+		}
+	}
+	return SetupProviderOption{}, false
 }
 
 func (m model) handleSetupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -420,6 +476,12 @@ func setupContentTop(height int, contentLines int, hasError bool) int {
 
 func (m model) setupStages() []setupStage {
 	stages := []setupStage{setupStageWelcome, setupStageMethod}
+	if m.setup.cliHarness != nil {
+		// CLI path skips the provider chooser too (the method row already named
+		// the provider) as well as endpoint/name/credentials (the harness login
+		// provides the credential).
+		return append(stages, setupStageModel, setupStageSafety, setupStageReady)
+	}
 	if m.setup.oauthMode {
 		// OAuth path skips endpoint/name/credentials (the login provides the credential).
 		return append(stages, setupStageProvider, setupStageModel, setupStageSafety, setupStageReady)
@@ -432,36 +494,25 @@ func (m model) setupStages() []setupStage {
 	return stages
 }
 
-// setupReturnToMethod resets the OAuth selection when navigating back to the
-// connect-method chooser.
+// setupReturnToMethod resets the OAuth/CLI selection when navigating back to
+// the connect-method chooser.
 func (m model) setupReturnToMethod() model {
 	m.setup.oauthMode = false
 	m.setup.oauthErr = ""
 	m.setup.oauthDevice = false
 	m.setup.deviceUserCode = ""
 	m.setup.deviceVerificationURI = ""
+	m.setup.cliHarness = nil
 	m.setup.providers = m.setup.allProviders
 	m.setup.selected = 0
 	m.resetSetupModels()
 	return m
 }
 
-// setupMethodOptions returns the connect-method choices for this run, dropping the
-// OAuth option when this setup's own provider list has no OAuth-capable entry — so
-// the user can't pick OAuth and land on an empty provider list.
+// setupMethodOptions returns the connect-method choices for this run — see
+// filterSetupMethodOptions for what gets dropped.
 func (m model) setupMethodOptions() []providerWizardMethodOption {
-	options := providerWizardMethodOptions()
-	if len(setupOAuthProviderOptions(m.setup.allProviders)) > 0 {
-		return options
-	}
-	filtered := make([]providerWizardMethodOption, 0, len(options))
-	for _, option := range options {
-		if option.oauth {
-			continue
-		}
-		filtered = append(filtered, option)
-	}
-	return filtered
+	return filterSetupMethodOptions(providerWizardMethodOptions(m.setup.agentCLIDetections), m.setup.allProviders)
 }
 
 func (m *model) moveSetupMethod(delta int) {
@@ -469,7 +520,17 @@ func (m *model) moveSetupMethod(delta int) {
 	if len(options) == 0 {
 		return
 	}
-	m.setup.selectedMethod = ((m.setup.selectedMethod+delta)%len(options) + len(options)) % len(options)
+	next := m.setup.selectedMethod
+	// Skip disabled (informational-only) rows, same as the /provider wizard —
+	// bounded by len(options) since "paste an API key" is always present and
+	// never disabled.
+	for i := 0; i < len(options); i++ {
+		next = ((next+delta)%len(options) + len(options)) % len(options)
+		if !options[next].disabled {
+			break
+		}
+	}
+	m.setup.selectedMethod = next
 }
 
 // setupOAuthCmd runs the chosen provider's browser OAuth login off the UI
@@ -639,18 +700,59 @@ func (m model) advanceSetup() (tea.Model, tea.Cmd) {
 		if m.setup.stage == setupStageMethod {
 			options := m.setupMethodOptions()
 			m.setup.selectedMethod = clamp(m.setup.selectedMethod, 0, maxInt(0, len(options)-1))
-			if len(options) > 0 && options[m.setup.selectedMethod].oauth {
+			m.setup.err = ""
+			if len(options) == 0 {
+				return m, nil
+			}
+			selected := options[m.setup.selectedMethod]
+			m.setup.oauthMode = false
+			m.setup.cliHarness = nil
+			switch selected.kind {
+			case providerWizardMethodOAuth:
 				m.setup.oauthMode = true
 				m.setup.providers = setupOAuthProviderOptions(m.setup.allProviders)
-			} else {
-				m.setup.oauthMode = false
+				m.setup.selected = 0
+				m.resetSetupModels()
+				m.setup.stage = setupStageProvider
+				return m, nil
+			case providerWizardMethodCLI:
+				if selected.disabled {
+					m.setup.err = selected.harness.DisplayName + " has no reusable credentials — it can still run as a sub-agent harness."
+					return m, nil
+				}
+				if !selected.loggedIn {
+					m.setup.err = selected.harness.DisplayName + " is not logged in — run `" +
+						selected.harness.LoginCommand() + "` to log in, then try again."
+					return m, nil
+				}
+				provider, ok := setupProviderForCatalogID(m.setup.allProviders, selected.harness.CatalogID)
+				if !ok {
+					m.setup.err = "no provider option for " + selected.harness.CatalogID
+					return m, nil
+				}
+				harness := selected.harness
+				m.setup.cliHarness = &harness
+				m.setup.providers = []SetupProviderOption{provider}
+				m.setup.selected = 0
+				m.setup.apiKey.SetValue("")
+				m.setup.baseURL = ""
+				m.setup.name = ""
+				m.resetSetupModels()
+				// The CLI row already named the provider — skip straight to model
+				// selection, mirroring applySetupOAuth's post-login jump.
+				m.setup.stage = setupStageModel
+				m.setup.modelErr = ""
+				m.setup.modelGen++
+				cmd := m.setupModelDiscoveryCmd(m.setup.modelGen)
+				m.setup.modelLoad = cmd != nil
+				return m, cmd
+			default:
 				m.setup.providers = m.setup.allProviders
+				m.setup.selected = 0
+				m.resetSetupModels()
+				m.setup.stage = setupStageProvider
+				return m, nil
 			}
-			m.setup.selected = 0
-			m.resetSetupModels()
-			m.setup.stage = setupStageProvider
-			m.setup.err = ""
-			return m, nil
 		}
 		// OAuth path: advancing from the OAuth provider list starts the browser login.
 		if m.setup.stage == setupStageProvider && m.setup.oauthMode {
@@ -729,6 +831,7 @@ func (m model) completeSetup() (tea.Model, tea.Cmd) {
 
 	name := m.setupProfileName(option)
 	apiKey := m.setupCredentialAPIKey(option)
+	authCLI := ""
 	// OAuth token login (e.g. xAI): the credential is the OAuth token stored under
 	// provider:<id>; name the profile after the provider id so the runtime resolver
 	// attaches the bearer, and store no API key.
@@ -736,12 +839,21 @@ func (m model) completeSetup() (tea.Model, tea.Cmd) {
 		name = option.ID
 		apiKey = ""
 	}
+	// CLI login: the credential is a detected agent-CLI's own local login, not a
+	// key or a zero-managed OAuth token — name the profile after the harness so
+	// it's recognizable, and store no API key/env.
+	if m.setup.cliHarness != nil {
+		name = m.setup.cliHarness.ID
+		apiKey = ""
+		authCLI = m.setup.cliHarness.ID
+	}
 	result, err := m.setupSave(SetupSelection{
 		CatalogID: option.ID,
 		Name:      name,
 		BaseURL:   m.setupBaseURL(option),
 		Model:     m.setupCurrentModel().ID,
 		APIKey:    apiKey,
+		AuthCLI:   authCLI,
 	})
 	if err != nil {
 		m.setup.err = err.Error()
@@ -1433,6 +1545,11 @@ func (m model) setupMethodLines(width int) []string {
 		blankSetupBlockLine(rowWidth),
 	}
 	for index, option := range options {
+		if option.disabled {
+			lines = append(lines, padSetupLine("  "+zeroTheme.faint.Render(option.label), rowWidth))
+			lines = append(lines, padSetupLine("    "+zeroTheme.faint.Render(option.subtitle), rowWidth))
+			continue
+		}
 		marker := "  "
 		style := zeroTheme.ink
 		if index == idx {
@@ -1626,6 +1743,9 @@ func (m model) setupAPIKeyInputLine(width int) string {
 }
 
 func (m model) setupCredentialSummary(option SetupProviderOption) string {
+	if m.setup.cliHarness != nil {
+		return m.setup.cliHarness.DisplayName + " login"
+	}
 	// An OAuth token-login provider (e.g. xAI) is authenticated by a stored,
 	// refreshable token, not an API key — don't advertise an env var for it on the
 	// Ready screen. (Key-minting OAuth like OpenRouter still ends up as a saved key.)

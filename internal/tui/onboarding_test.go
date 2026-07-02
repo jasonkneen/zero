@@ -28,7 +28,7 @@ func TestSetupMethodOptionsDropsOAuthWithoutOAuthProviders(t *testing.T) {
 		{ID: "ollama", Name: "Ollama Local", Local: true},
 	})
 	for _, option := range noOAuth.setupMethodOptions() {
-		if option.oauth {
+		if option.kind == providerWizardMethodOAuth {
 			t.Fatal("OAuth method must be hidden when the setup has no OAuth providers")
 		}
 	}
@@ -40,7 +40,7 @@ func TestSetupMethodOptionsDropsOAuthWithoutOAuthProviders(t *testing.T) {
 	})
 	hasOAuth := false
 	for _, option := range withOAuth.setupMethodOptions() {
-		if option.oauth {
+		if option.kind == providerWizardMethodOAuth {
 			hasOAuth = true
 		}
 	}

@@ -293,6 +293,93 @@ func (m model) turnsText() string {
 	})
 }
 
+// handleOnlyBashCommand implements /onlybash [on|off|status]. Bare "/onlybash"
+// (and "/onlybash toggle") flips the current state; "status" just reports it.
+// The actual filter mutation lives in enableOnlyBash/disableOnlyBash so the
+// stash-on-first-enable invariant has one place to be correct.
+func (m model) handleOnlyBashCommand(args string) (model, string) {
+	args = strings.TrimSpace(strings.ToLower(args))
+	switch args {
+	case "", "toggle":
+		if m.onlyBashActive {
+			m = m.disableOnlyBash()
+		} else {
+			m = m.enableOnlyBash()
+		}
+	case "on":
+		m = m.enableOnlyBash()
+	case "off":
+		m = m.disableOnlyBash()
+	case "status":
+		// report only — fall through to onlyBashText() below
+	default:
+		return m, "Onlybash\nUsage: /onlybash [on|off|status]"
+	}
+	return m, m.onlyBashText()
+}
+
+// enableOnlyBash switches m.agentOptions to the modelregistry "onlybash"
+// preset's tool filter (bash + skill only, tool_search disabled). It stashes
+// the PRIOR filter only on an inactive->active transition: calling this while
+// onlybash is already active (e.g. a redundant "/onlybash on") must not
+// re-stash onlybash's own [bash,skill]/[tool_search] filter as if it were the
+// operator's original configuration — that would make disableOnlyBash restore
+// onlybash's filter instead of the real one, permanently losing the operator's
+// setting for the rest of the session.
+func (m model) enableOnlyBash() model {
+	if !m.onlyBashActive {
+		m.onlyBashStashedEnabledTools = append([]string{}, m.agentOptions.EnabledTools...)
+		m.onlyBashStashedDisabledTools = append([]string{}, m.agentOptions.DisabledTools...)
+	}
+	if mode, ok := modelregistry.LookupMode("onlybash"); ok {
+		m.agentOptions.EnabledTools = mode.EnabledTools
+		m.agentOptions.DisabledTools = mode.DisabledTools
+	}
+	m.onlyBashActive = true
+	return m
+}
+
+// disableOnlyBash restores whatever tool filter was active before /onlybash
+// on, clearing the stash. Applies to the NEXT run, same as /turns — there is
+// no mid-run env propagation to worry about here (unlike /turns' ZERO_MAX_TURNS),
+// so no pending-run guard is needed.
+func (m model) disableOnlyBash() model {
+	m.agentOptions.EnabledTools = m.onlyBashStashedEnabledTools
+	m.agentOptions.DisabledTools = m.onlyBashStashedDisabledTools
+	m.onlyBashStashedEnabledTools = nil
+	m.onlyBashStashedDisabledTools = nil
+	m.onlyBashActive = false
+	return m
+}
+
+func (m model) onlyBashText() string {
+	state := "off"
+	if m.onlyBashActive {
+		state = "on"
+	}
+	enabled := "unrestricted"
+	if len(m.agentOptions.EnabledTools) > 0 {
+		enabled = strings.Join(m.agentOptions.EnabledTools, ", ")
+	}
+	disabled := "none"
+	if len(m.agentOptions.DisabledTools) > 0 {
+		disabled = strings.Join(m.agentOptions.DisabledTools, ", ")
+	}
+	return renderCommandOutput(commandOutput{
+		Title:  "Onlybash",
+		Status: commandStatusOK,
+		Sections: []commandSection{{
+			Title: "State",
+			Lines: []string{
+				"onlybash: " + state,
+				"enabled tools: " + enabled,
+				"disabled tools: " + disabled,
+			},
+		}},
+		Hints: []string{"/onlybash on restricts this session to bash + skill (tool_search disabled, tools cannot be added back); /onlybash off restores prior filters; applies to the next run"},
+	})
+}
+
 func (m model) selfCorrectText() string {
 	depth := "LSP diagnostics only — fast, scoped to changed files"
 	if m.selfCorrectTests {

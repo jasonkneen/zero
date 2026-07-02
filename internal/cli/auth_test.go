@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
+	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/oauth"
 )
 
@@ -154,5 +156,107 @@ func TestRunAuthHelp(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("help missing %q:\n%s", want, stdout.String())
 		}
+	}
+}
+
+// authTestAgentCLIDeps stubs appDeps.detectAgentCLIs and resolveConfig so
+// `zero auth status`'s "Detected agent CLIs" section is exercised hermetically
+// — never touching the real PATH, filesystem, or which providers happen to be
+// configured on the machine running the test.
+func authTestAgentCLIDeps(t *testing.T, detections []agentcli.Detection, providers []config.ProviderProfile) appDeps {
+	t.Helper()
+	return appDeps{
+		detectAgentCLIs: func(agentcli.Deps) []agentcli.Detection { return detections },
+		getwd:           func() (string, error) { return t.TempDir(), nil },
+		resolveConfig: func(string, config.Overrides) (config.ResolvedConfig, error) {
+			return config.ResolvedConfig{Providers: providers}, nil
+		},
+	}
+}
+
+func TestRunAuthStatusListsDetectedAgentCLIs(t *testing.T) {
+	withAuthStore(t)
+	claudeHarness, ok := agentcli.Lookup("claude")
+	if !ok {
+		t.Fatal("test assumption broken: claude missing from the agentcli catalog")
+	}
+	codexHarness, ok := agentcli.Lookup("codex")
+	if !ok {
+		t.Fatal("test assumption broken: codex missing from the agentcli catalog")
+	}
+	geminiHarness, ok := agentcli.Lookup("gemini")
+	if !ok {
+		t.Fatal("test assumption broken: gemini missing from the agentcli catalog")
+	}
+	deps := authTestAgentCLIDeps(t,
+		[]agentcli.Detection{
+			{Harness: claudeHarness, Login: agentcli.LoggedIn},
+			{Harness: codexHarness, Login: agentcli.LoggedOut},
+			{Harness: geminiHarness, Login: agentcli.LoggedOut},
+		},
+		[]config.ProviderProfile{{Name: "my-claude", CatalogID: "anthropic", AuthCLI: "claude"}},
+	)
+
+	var stdout, stderr bytes.Buffer
+	if code := runWithDeps([]string{"auth", "status"}, &stdout, &stderr, deps); code != exitSuccess {
+		t.Fatalf("exit = %d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Detected agent CLIs:") {
+		t.Fatalf("status output missing the agent-CLI section: %q", out)
+	}
+	if !strings.Contains(out, "claude") || !strings.Contains(out, "logged in") {
+		t.Fatalf("status output missing claude's logged-in state: %q", out)
+	}
+	if !strings.Contains(out, `used by profile "my-claude"`) {
+		t.Fatalf("status output should attribute claude to the my-claude profile: %q", out)
+	}
+	if !strings.Contains(out, "codex") || !strings.Contains(out, "not logged in") {
+		t.Fatalf("status output missing codex's logged-out state: %q", out)
+	}
+	if !strings.Contains(out, "gemini") || !strings.Contains(out, "sub-agent harness only") {
+		t.Fatalf("status output should note gemini has no reusable provider credentials: %q", out)
+	}
+}
+
+// TestRunAuthStatusFilteredByProviderOmitsAgentCLIs locks in that the
+// agent-CLI section only appears on the unfiltered `zero auth status` — a
+// `zero auth status <provider>` query is about one zero-native OAuth login,
+// not the whole-machine CLI inventory.
+func TestRunAuthStatusFilteredByProviderOmitsAgentCLIs(t *testing.T) {
+	withAuthStore(t)
+	claudeHarness, ok := agentcli.Lookup("claude")
+	if !ok {
+		t.Fatal("test assumption broken: claude missing from the agentcli catalog")
+	}
+	deps := authTestAgentCLIDeps(t, []agentcli.Detection{{Harness: claudeHarness, Login: agentcli.LoggedIn}}, nil)
+
+	var stdout, stderr bytes.Buffer
+	if code := runWithDeps([]string{"auth", "status", "demo"}, &stdout, &stderr, deps); code != exitSuccess {
+		t.Fatalf("exit = %d stderr=%s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Detected agent CLIs:") {
+		t.Fatalf("filtered status should not include the agent-CLI section: %q", stdout.String())
+	}
+}
+
+func TestRunAuthStatusJSONIncludesAgentCLIs(t *testing.T) {
+	withAuthStore(t)
+	claudeHarness, ok := agentcli.Lookup("claude")
+	if !ok {
+		t.Fatal("test assumption broken: claude missing from the agentcli catalog")
+	}
+	deps := authTestAgentCLIDeps(t, []agentcli.Detection{{Harness: claudeHarness, Login: agentcli.LoggedIn}}, nil)
+
+	var stdout, stderr bytes.Buffer
+	if code := runWithDeps([]string{"auth", "status", "--json"}, &stdout, &stderr, deps); code != exitSuccess {
+		t.Fatalf("exit = %d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, `"id": "claude"`) {
+		t.Fatalf("JSON status missing agentCLIs[].id: %s", out)
+	}
+	if !strings.Contains(out, `"loggedIn": true`) {
+		t.Fatalf("JSON status missing agentCLIs[].loggedIn: %s", out)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/provideronboarding"
 )
@@ -65,8 +66,13 @@ func runProvidersDetect(args []string, stdout io.Writer, stderr io.Writer, deps 
 	ctx, stop := signalContext()
 	defer stop()
 	detected := deps.detectLocalRuntimes(ctx, provideronboarding.LocalDetectOptions{})
+	detectAgentCLIs := deps.detectAgentCLIs
+	if detectAgentCLIs == nil {
+		detectAgentCLIs = agentcli.Detect
+	}
+	agentCLIs := detectAgentCLIs(agentcli.Deps{})
 
-	report := buildProviderDetectReport(resolved, detected)
+	report := buildProviderDetectReport(resolved, detected, agentCLIs)
 
 	if options.json {
 		if err := writePrettyJSON(stdout, report); err != nil {
@@ -95,7 +101,7 @@ func parseProviderDetectArgs(args []string) (providerDetectOptions, bool, error)
 	return options, false, nil
 }
 
-func buildProviderDetectReport(resolved config.ResolvedConfig, detected []provideronboarding.DetectedLocalRuntime) providerDetectReport {
+func buildProviderDetectReport(resolved config.ResolvedConfig, detected []provideronboarding.DetectedLocalRuntime, agentCLIs []agentcli.Detection) providerDetectReport {
 	report := providerDetectReport{
 		DetectedRuntimes: make([]providerDetectRuntime, 0, len(detected)),
 		Providers:        make([]providerDetectProvider, 0, len(resolved.Providers)),
@@ -111,7 +117,7 @@ func buildProviderDetectReport(resolved config.ResolvedConfig, detected []provid
 	}
 	for _, profile := range resolved.Providers {
 		active := strings.TrimSpace(profile.Name) != "" && profile.Name == resolved.ActiveProvider
-		state := provideronboarding.ProviderState{Profile: profile, Active: active}
+		state := provideronboarding.ProviderState{Profile: profile, Active: active, Detections: agentCLIs}
 		actions := state.Actions()
 		entry := providerDetectProvider{
 			Name:    profile.Name,

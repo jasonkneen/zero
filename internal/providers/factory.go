@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/modelregistry"
 	"github.com/Gitlawb/zero/internal/oauth"
@@ -33,6 +34,12 @@ type Options struct {
 	// independent lookup that could pick a different login (a backend-rejected
 	// mismatch).
 	OAuthLoginKey string
+	// AgentCLIDeps are the agentcli.Deps used to extract credentials for a
+	// profile.AuthCLI-authenticated provider (see agentclicreds.go). The zero
+	// value resolves to the real filesystem/keychain (production default);
+	// tests inject fakes so credential resolution never touches a real PATH,
+	// disk, or the macOS keychain.
+	AgentCLIDeps agentcli.Deps
 }
 
 // New creates a runtime provider for a resolved provider profile.
@@ -40,6 +47,16 @@ func New(profile config.ProviderProfile, options Options) (zeroruntime.Provider,
 	resolved, err := resolveProfile(profile, options)
 	if err != nil {
 		return nil, err
+	}
+
+	// A profile.AuthCLI profile authenticates with a detected agent-CLI's own
+	// local login (Claude Code, Codex, ...) instead of a zero-managed API key
+	// or OAuth login. This branch takes priority over isCodexCatalog below —
+	// a CLI-authed chatgpt profile still needs the Codex-flavored provider,
+	// just with credentials sourced from agentcli instead of zero's OAuth
+	// store, so it is handled entirely inside newCLIAuthedProvider.
+	if authCLI := strings.TrimSpace(profile.AuthCLI); authCLI != "" {
+		return newCLIAuthedProvider(profile, resolved, authCLI, options)
 	}
 
 	// The ChatGPT (Codex) catalog requires the Codex-flavored provider: the

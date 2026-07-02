@@ -238,3 +238,48 @@ func TestOAuthLoginCandidates(t *testing.T) {
 		})
 	}
 }
+
+// TestHasConfiguredCredentialAuthCLI locks in that AuthCLI counts as a
+// configured credential: without this, OAuthLoginCandidates would attach
+// zero's generic OAuth resolver on top of a keyless CLI-authed profile,
+// letting a same-named zero-native login silently hijack it.
+func TestHasConfiguredCredentialAuthCLI(t *testing.T) {
+	cases := []struct {
+		name    string
+		profile ProviderProfile
+		want    bool
+	}{
+		{
+			name:    "AuthCLI alone is a configured credential",
+			profile: ProviderProfile{Name: "claude", CatalogID: "anthropic", AuthCLI: "claude"},
+			want:    true,
+		},
+		{
+			name:    "whitespace-only AuthCLI is not configured",
+			profile: ProviderProfile{Name: "claude", CatalogID: "anthropic", AuthCLI: "   "},
+			want:    false,
+		},
+		{
+			name:    "no credential at all",
+			profile: ProviderProfile{Name: "anthropic", CatalogID: "anthropic"},
+			want:    false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.profile.HasConfiguredCredential(); got != c.want {
+				t.Fatalf("HasConfiguredCredential() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestOAuthLoginCandidatesAuthCLIBlocksCandidates locks in that a CLI-authed
+// profile yields no OAuth login candidates — the whole point of gating
+// HasConfiguredCredential on AuthCLI.
+func TestOAuthLoginCandidatesAuthCLIBlocksCandidates(t *testing.T) {
+	profile := ProviderProfile{Name: "claude", CatalogID: "anthropic", AuthCLI: "claude"}
+	if got := profile.OAuthLoginCandidates(); got != nil {
+		t.Fatalf("OAuthLoginCandidates() = %#v, want nil for an AuthCLI profile", got)
+	}
+}

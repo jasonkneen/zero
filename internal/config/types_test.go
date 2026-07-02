@@ -32,6 +32,45 @@ func TestToolsConfigJSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestProviderProfileAuthCLIJSONRoundTrip locks in that AuthCLI survives both
+// directions of JSON: Marshal via the field's own struct tag (ProviderProfile
+// has no custom MarshalJSON) and Unmarshal via the custom UnmarshalJSON, which
+// must list authCLI/auth_cli in its rawProfile shadow struct or the field
+// would silently fail to decode despite encoding correctly.
+func TestProviderProfileAuthCLIJSONRoundTrip(t *testing.T) {
+	original := ProviderProfile{Name: "claude", CatalogID: "anthropic", AuthCLI: "claude"}
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded ProviderProfile
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if decoded.AuthCLI != "claude" {
+		t.Fatalf("AuthCLI round-trip = %q, want %q (encoded: %s)", decoded.AuthCLI, "claude", encoded)
+	}
+
+	// The snake_case alias must also decode (matches every other field's
+	// camel+snake pattern in UnmarshalJSON).
+	var snake ProviderProfile
+	if err := snake.UnmarshalJSON([]byte(`{"name":"codex","auth_cli":"codex"}`)); err != nil {
+		t.Fatalf("UnmarshalJSON(snake) error = %v", err)
+	}
+	if snake.AuthCLI != "codex" {
+		t.Fatalf("auth_cli decode = %q, want %q", snake.AuthCLI, "codex")
+	}
+
+	// omitempty: a profile with no AuthCLI must not emit the field.
+	emptyEncoded, err := json.Marshal(ProviderProfile{Name: "openai"})
+	if err != nil {
+		t.Fatalf("Marshal(empty) error = %v", err)
+	}
+	if string(emptyEncoded) != `{"name":"openai"}` {
+		t.Fatalf("Marshal(empty) = %s, want no authCLI field", emptyEncoded)
+	}
+}
+
 func TestToolsConfigPresentOnOverridesAndResolved(t *testing.T) {
 	// Compile-time guard that Overrides and ResolvedConfig carry the field too.
 	overrides := Overrides{Tools: ToolsConfig{DeferThreshold: 3}}

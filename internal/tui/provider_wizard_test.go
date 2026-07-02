@@ -49,7 +49,7 @@ func TestProviderCommandOpensOnboardingWizard(t *testing.T) {
 	}
 
 	// Choosing the API-key method reveals the full provider catalog.
-	next.providerWizard.selectedMethod = len(providerWizardMethodOptions()) - 1
+	next.providerWizard.selectedMethod = len(next.providerWizard.methodOptions()) - 1
 	updated, _ = next.Update(testKey(tea.KeyEnter))
 	next = updated.(model)
 	listView := plainRender(t, next.View())
@@ -1034,7 +1034,7 @@ func openProviderWizardForTest(t *testing.T, m model) model {
 	// API-key / browse path, so select that method and advance into the provider
 	// list (the OAuth path is covered by the OAuth-specific tests).
 	if next.providerWizard.step == providerWizardStepMethod {
-		options := providerWizardMethodOptions()
+		options := next.providerWizard.methodOptions()
 		next.providerWizard.selectedMethod = len(options) - 1 // last = "browse / API key"
 		u2, _ := next.Update(testKey(tea.KeyEnter))
 		next = u2.(model)

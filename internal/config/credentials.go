@@ -156,16 +156,21 @@ func MigratePlaintextProviderKeys(path string, store APIKeySetter) (int, error) 
 }
 
 // HasConfiguredCredential reports whether the profile is set up to authenticate
-// with its own API key (inline, stored, or a raw auth header). It is the single
-// definition of "this profile is key-authed", shared by OAuthLoginCandidates and
-// the cli/tui setup surfaces so they never disagree about whether a profile is
-// keyed. APIKeyEnv is deliberately NOT included: an env var may be unset at
-// runtime while the profile actually relies on an OAuth login, so an
-// env-configured-but-empty profile must still be allowed to resolve a token.
+// with its own API key (inline, stored, or a raw auth header) or a reused
+// agent-CLI login (AuthCLI). It is the single definition of "this profile is
+// already credentialed", shared by OAuthLoginCandidates and the cli/tui setup
+// surfaces so they never disagree. APIKeyEnv is deliberately NOT included: an
+// env var may be unset at runtime while the profile actually relies on an
+// OAuth login, so an env-configured-but-empty profile must still be allowed to
+// resolve a token. AuthCLI IS included: a profile that reuses a harness CLI's
+// login carries no key at all, and without this gate OAuthLoginCandidates would
+// attach zero's generic OAuth resolver on top of it, letting a same-named
+// zero-native login silently hijack the keyless CLI profile.
 func (profile ProviderProfile) HasConfiguredCredential() bool {
 	return strings.TrimSpace(profile.APIKey) != "" ||
 		profile.APIKeyStored ||
-		strings.TrimSpace(profile.AuthHeaderValue) != ""
+		strings.TrimSpace(profile.AuthHeaderValue) != "" ||
+		strings.TrimSpace(profile.AuthCLI) != ""
 }
 
 // OAuthLoginCandidates returns the login names to try, in order, when resolving
