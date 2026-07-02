@@ -101,6 +101,12 @@ jobs:
   # assets are live — the package's postinstall downloads its binary from the
   # GitHub Release, so publishing before the assets exist would ship a package
   # that fails to install.
+  #
+  # Auth is npm OIDC trusted publishing: no NPM_TOKEN secret. The package's
+  # npmjs.com settings must list this repo + workflow file as a trusted
+  # publisher, and provenance is then generated automatically. Note npm only
+  # allows configuring a trusted publisher on an EXISTING package, so the very
+  # first @gitlawb/zero publish is a one-time manual `npm publish` bootstrap.
   publish-npm:
     name: Publish npm package
     needs: package
@@ -108,16 +114,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm --provenance attestation
+      id-token: write # OIDC token exchange for npm trusted publishing + provenance
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      # No registry-url here on purpose: setup-node's registry-url writes an
+      # .npmrc line referencing $NODE_AUTH_TOKEN, and npm hard-fails on the
+      # unset env var. Trusted publishing needs no token at all.
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          node-version: 24
+
+      # OIDC trusted publishing needs npm >= 11.5.1; runner images can lag.
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest && npm --version
 
       # Probe the exact URLs postinstall will build (internal/release/release.go
       # asset-name scheme) as an anonymous client. This also blocks publishing
@@ -144,6 +156,4 @@ jobs:
           echo "all release assets for v${version} are publicly downloadable."
 
       - name: Publish to npm
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
