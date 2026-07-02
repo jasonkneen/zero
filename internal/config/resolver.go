@@ -376,6 +376,18 @@ func effectiveProviderKind(profile ProviderProfile) ProviderKind {
 	return ""
 }
 
+// catalogDefaultModel returns the default model of a catalog provider ("" when
+// the id is unknown), used to fill a missing profile.Model for the official-API
+// kinds so a hand-written profile without a model resolves instead of bricking
+// every command that resolves config up front (zero config, bare zero setup).
+func catalogDefaultModel(catalogID string) string {
+	descriptor, ok := providercatalog.Get(catalogID)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(descriptor.DefaultModel)
+}
+
 func catalogDescriptorForProfile(profile ProviderProfile) (providercatalog.Descriptor, bool) {
 	catalogID := providercatalog.NormalizeID(profile.CatalogID)
 	if catalogID == "" {
@@ -737,11 +749,16 @@ func unionStrings(base []string, extra []string) []string {
 }
 
 type normalizeOptions struct {
-	defaultOpenAIModel bool
+	// defaultModels fills a missing profile.Model for the official-API provider
+	// kinds (openai from the model registry; anthropic/google from their catalog
+	// descriptors). Off for provider-command configs (command.go), which must
+	// surface exactly what the external command returned rather than inventing
+	// a model behind its back.
+	defaultModels bool
 }
 
 func normalizeProviders(providers []ProviderProfile, activeName string, envMaps ...map[string]string) ([]ProviderProfile, ProviderProfile, error) {
-	return normalizeProvidersWithOptions(providers, activeName, normalizeOptions{defaultOpenAIModel: true}, envMaps...)
+	return normalizeProvidersWithOptions(providers, activeName, normalizeOptions{defaultModels: true}, envMaps...)
 }
 
 func normalizeProvidersWithoutModelDefaults(providers []ProviderProfile, activeName string, envMaps ...map[string]string) ([]ProviderProfile, ProviderProfile, error) {
@@ -791,7 +808,7 @@ func normalizeProvidersWithOptions(providers []ProviderProfile, activeName strin
 		return nil, ProviderProfile{}, fmt.Errorf("%w: active provider %q not found", ErrNoActiveProvider, activeName)
 	}
 	if active.Model == "" {
-		return nil, ProviderProfile{}, providerError(active, "provider %s requires model", active.Name)
+		return nil, ProviderProfile{}, providerError(active, "provider %s requires model — add \"model\" to its entry in config.json, or re-run: zero setup <catalog-id> --model <model>", active.Name)
 	}
 
 	return normalized, active, nil
@@ -838,7 +855,7 @@ func normalizeProvider(profile ProviderProfile, env map[string]string, options n
 	case ProviderKindOpenAI:
 		if profile.BaseURL == "" || isOfficialOpenAIBaseURL(profile.BaseURL) {
 			profile.BaseURL = OpenAIBaseURL
-			if options.defaultOpenAIModel && profile.Model == "" {
+			if options.defaultModels && profile.Model == "" {
 				profile.Model = modelregistry.DefaultModelID
 			}
 			return profile, nil
@@ -855,6 +872,9 @@ func normalizeProvider(profile ProviderProfile, env map[string]string, options n
 	case ProviderKindAnthropic:
 		if profile.BaseURL == "" || isOfficialAnthropicBaseURL(profile.BaseURL) {
 			profile.BaseURL = AnthropicBaseURL
+			if options.defaultModels && profile.Model == "" {
+				profile.Model = catalogDefaultModel("anthropic")
+			}
 			return profile, nil
 		}
 		return ProviderProfile{}, providerError(profile, "anthropic provider %s requires official baseURL %s", profile.Name, AnthropicBaseURL)
@@ -869,6 +889,9 @@ func normalizeProvider(profile ProviderProfile, env map[string]string, options n
 	case ProviderKindGoogle:
 		if profile.BaseURL == "" || isOfficialGoogleBaseURL(profile.BaseURL) {
 			profile.BaseURL = GoogleBaseURL
+			if options.defaultModels && profile.Model == "" {
+				profile.Model = catalogDefaultModel("google")
+			}
 			return profile, nil
 		}
 		return ProviderProfile{}, providerError(profile, "google provider %s requires official baseURL %s", profile.Name, GoogleBaseURL)
