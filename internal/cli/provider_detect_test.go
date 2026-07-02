@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Gitlawb/zero/internal/agentcli"
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/provideronboarding"
 )
@@ -103,5 +104,41 @@ func TestRunProvidersDetectJSONNoRuntimesActiveProvider(t *testing.T) {
 	}
 	if len(payload.Providers[0].Actions) != 1 || payload.Providers[0].Actions[0].Label != "Check provider" {
 		t.Fatalf("expected only a Check action for an active keyed provider, got %#v", payload.Providers[0].Actions)
+	}
+}
+
+// TestRunProvidersDetectSurfacesAgentCLIHint pins the AuthCLI wiring in
+// runProvidersDetect: without deps.detectAgentCLIs plumbed into
+// buildProviderDetectReport, a keyless provider's "Set API key" action would
+// never mention a detected, logged-in agent CLI as an alternative.
+func TestRunProvidersDetectSurfacesAgentCLIHint(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	deps := commandCenterDeps(t)
+	deps.detectLocalRuntimes = func(context.Context, provideronboarding.LocalDetectOptions) []provideronboarding.DetectedLocalRuntime {
+		return nil
+	}
+	deps.detectAgentCLIs = func(agentcli.Deps) []agentcli.Detection {
+		return []agentcli.Detection{{
+			Harness: agentcli.Harness{DisplayName: "Claude Code", CatalogID: "anthropic"},
+			Login:   agentcli.LoggedIn,
+		}}
+	}
+	deps.resolveConfig = func(string, config.Overrides) (config.ResolvedConfig, error) {
+		profile := config.ProviderProfile{
+			Name:         "anthropic",
+			ProviderKind: config.ProviderKindAnthropic,
+			CatalogID:    "anthropic",
+			Model:        "claude-sonnet",
+		}
+		return config.ResolvedConfig{ActiveProvider: "other", Providers: []config.ProviderProfile{profile}}, nil
+	}
+
+	exitCode := runWithDeps([]string{"providers", "detect", "--json"}, &stdout, &stderr, deps)
+	if exitCode != exitSuccess {
+		t.Fatalf("exit=%d stderr=%s", exitCode, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Or reuse your Claude Code") {
+		t.Fatalf("detect JSON missing the agent-CLI credential hint (detectAgentCLIs result never reached the report):\n%s", out)
 	}
 }

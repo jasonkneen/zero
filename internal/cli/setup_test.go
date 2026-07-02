@@ -238,6 +238,49 @@ func TestSaveSetupProviderCLIOptionsOverrideCustomEndpointSelection(t *testing.T
 	}
 }
 
+func TestSaveSetupProviderCLISelectionKeepsProfileKeyless(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "zero", "config.json")
+
+	// "anthropic" has an AuthEnvVars entry (ANTHROPIC_API_KEY): without the
+	// AuthCLI branch, providerProfileForAdd would auto-fill APIKeyEnv and this
+	// profile would silently route requests through an ambient env var
+	// instead of the CLI login the user picked.
+	result, err := saveSetupProvider(appDeps{
+		userConfigPath: func() (string, error) {
+			return configPath, nil
+		},
+	}, tui.SetupSelection{
+		CatalogID: "anthropic",
+		Model:     "claude-opus-4",
+		AuthCLI:   "claude",
+	}, setupSaveOptions{})
+	if err != nil {
+		t.Fatalf("saveSetupProvider() error = %v", err)
+	}
+
+	if result.Provider.AuthCLI != "claude" {
+		t.Fatalf("Provider.AuthCLI = %q, want claude", result.Provider.AuthCLI)
+	}
+	if result.Provider.APIKey != "" {
+		t.Fatalf("Provider.APIKey = %q, want empty for a CLI-authed profile", result.Provider.APIKey)
+	}
+	if result.Provider.APIKeyEnv != "" {
+		t.Fatalf("Provider.APIKeyEnv = %q, want empty for a CLI-authed profile", result.Provider.APIKeyEnv)
+	}
+
+	cfg := readFileConfig(t, configPath)
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("Providers = %#v, want one provider", cfg.Providers)
+	}
+	profile := cfg.Providers[0]
+	if profile.AuthCLI != "claude" {
+		t.Fatalf("stored AuthCLI = %q, want claude", profile.AuthCLI)
+	}
+	if profile.APIKey != "" || profile.APIKeyEnv != "" || profile.APIKeyStored {
+		t.Fatalf("stored provider must stay keyless for AuthCLI: %#v", profile)
+	}
+}
+
 func TestVerifySetupProviderDistinguishesMissingFromRejectedKey(t *testing.T) {
 	// AUDIT-M1: verifying a remote provider with no key must say "no API key found",
 	// not probe and report "the provider rejected the API key". The probe must not run.
