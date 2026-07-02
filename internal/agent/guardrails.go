@@ -284,11 +284,47 @@ const (
 	noOutputStopSuffix = "to avoid consuming tokens without making progress."
 )
 
+// providerEmptyStream reports that a cleanly-completed turn carried NOTHING —
+// no visible text, no tool calls (real or dropped), and no reasoning signal.
+// That shape is a transport/backend fault (e.g. the ollama cloud relay
+// answering 200 with an instantly-empty SSE under load), not model behavior:
+// a model that is generating always leaves SOME trace (text, a tool call
+// attempt, or reasoning deltas).
+func providerEmptyStream(collected zeroruntime.CollectedStream) bool {
+	return strings.TrimSpace(collected.Text) == "" &&
+		len(collected.ToolCalls) == 0 &&
+		collected.DroppedToolCalls == 0 &&
+		len(collected.ReasoningBlocks) == 0 &&
+		!collected.ReasoningEmitted
+}
+
+// allEmptyTurnsProviderEmpty reports that every strike toward the no-output
+// guard was a provider-empty stream, so the stop message should name the
+// backend fault rather than generic agent no-progress.
+func (state *guardState) allEmptyTurnsProviderEmpty() bool {
+	return state.emptyTurns > 0 && state.providerEmptyTurns == state.emptyTurns
+}
+
 // noOutputStopAnswer is the final answer returned when the no-output guard
 // stops the run. The turn count is interpolated at the call site.
 func noOutputStopAnswer(turns int) string {
 	return noOutputStopPrefix + strconv.Itoa(turns) + " turns " + noOutputStopMarker + " " + noOutputStopSuffix
 }
+
+// providerEmptyStopAnswer is the final answer when every guard strike was a
+// provider-empty stream: the backend repeatedly answered with contentless
+// completions (already retried with backoff inside each turn). It tells the
+// user the truth — the provider failed, not the agent — and what to do next.
+func providerEmptyStopAnswer(turns int) string {
+	return providerEmptyStopPrefix +
+		strconv.Itoa(turns) + " consecutive attempts, each already retried with backoff. " +
+		"The backend is likely rate-limiting or degraded right now — try again shortly, or switch providers/models (zero providers use <name>)."
+}
+
+// providerEmptyStopPrefix is the stable head of providerEmptyStopAnswer, used
+// by IsNoProgressStop so session titling / resume filtering treat the
+// provider-empty stop like the other guard answers (not real content).
+const providerEmptyStopPrefix = "The model provider returned an empty response (no text, no tool calls, no reasoning) on "
 
 // IsNoProgressStop reports whether content IS the no-output guardrail stop answer
 // (a run that produced no visible text and no tool calls). It matches the EXACT
@@ -300,6 +336,15 @@ func noOutputStopAnswer(turns int) string {
 // and skip its title generation.
 func IsNoProgressStop(content string) bool {
 	trimmed := strings.TrimSpace(content)
+	// The provider-empty variant: stable prefix + a bare integer count.
+	if rest, ok := strings.CutPrefix(trimmed, providerEmptyStopPrefix); ok {
+		if sep := strings.Index(rest, " consecutive attempts"); sep > 0 {
+			if _, err := strconv.Atoi(rest[:sep]); err == nil {
+				return true
+			}
+		}
+		return false
+	}
 	if !strings.HasPrefix(trimmed, noOutputStopPrefix) {
 		return false
 	}
@@ -352,6 +397,7 @@ func toolOnlyProgressReminder(turns int) string {
 // purely from tool-call names and per-turn output, matching what the loop holds.
 type guardState struct {
 	emptyTurns               int
+	providerEmptyTurns       int
 	totalToolCalls           int
 	toolCallsSincePlanUpdate int
 	planEverCalled           bool
@@ -417,8 +463,18 @@ func (state *guardState) observeTurn(collected zeroruntime.CollectedStream) (sto
 
 	if hasToolCalls || hasVisibleText {
 		state.emptyTurns = 0
+		state.providerEmptyTurns = 0
 	} else {
 		state.emptyTurns++
+		// Track separately whether the empty turn was a PROVIDER-empty stream
+		// (nothing at all came back — not even reasoning) vs a behavioral empty
+		// (the model thought/streamed but committed no answer). When every
+		// strike was provider-empty, the stop message names the backend fault
+		// instead of blaming the agent — the difference between the user
+		// retrying/switching providers and filing a "the agent gives up" bug.
+		if providerEmptyStream(collected) {
+			state.providerEmptyTurns++
+		}
 	}
 	if hasToolCalls && !hasVisibleText {
 		state.toolOnlyTurns++

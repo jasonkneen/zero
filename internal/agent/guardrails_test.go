@@ -9,9 +9,21 @@ import (
 	"github.com/Gitlawb/zero/internal/zeroruntime"
 )
 
-// emptyTurn is a stream that produces no visible text and no tool calls.
+// emptyTurn is a PROVIDER-empty stream: it completes cleanly carrying nothing
+// at all (the ollama-cloud 200+[DONE] shape). The loop retries these in-turn
+// before counting a no-output strike.
 func emptyTurn() []zeroruntime.StreamEvent {
 	return []zeroruntime.StreamEvent{{Type: zeroruntime.StreamEventDone}}
+}
+
+// reasoningOnlyTurn is a BEHAVIORAL empty turn: the model streamed reasoning
+// (so the provider clearly worked) but committed no text and no tool calls.
+// These are NOT retried in-turn; they count directly toward the no-output guard.
+func reasoningOnlyTurn() []zeroruntime.StreamEvent {
+	return []zeroruntime.StreamEvent{
+		{Type: zeroruntime.StreamEventReasoning, Content: "thinking…"},
+		{Type: zeroruntime.StreamEventDone},
+	}
 }
 
 // textTurn produces a turn with visible assistant text.
@@ -45,9 +57,9 @@ func countUserMessagesContaining(messages []zeroruntime.Message, needle string) 
 func TestRunStopsAfterConsecutiveEmptyTurns(t *testing.T) {
 	provider := &mockProvider{
 		turns: [][]zeroruntime.StreamEvent{
-			emptyTurn(),
-			emptyTurn(),
-			emptyTurn(),
+			reasoningOnlyTurn(),
+			reasoningOnlyTurn(),
+			reasoningOnlyTurn(),
 			// A 4th turn exists but must never be requested.
 			textTurn("should never reach here"),
 		},
@@ -77,10 +89,10 @@ func TestRunStopsAfterConsecutiveEmptyTurns(t *testing.T) {
 func TestRunResetsEmptyTurnCounterOnVisibleOutput(t *testing.T) {
 	provider := &mockProvider{
 		turns: [][]zeroruntime.StreamEvent{
-			emptyTurn(),
-			emptyTurn(),
+			reasoningOnlyTurn(),
+			reasoningOnlyTurn(),
 			textTurn("here is real progress"), // resets the counter and is the final answer
-			emptyTurn(),
+			reasoningOnlyTurn(),
 		},
 	}
 
@@ -109,11 +121,11 @@ func TestRunResetsEmptyTurnCounterOnToolCall(t *testing.T) {
 
 	provider := &mockProvider{
 		turns: [][]zeroruntime.StreamEvent{
-			emptyTurn(),
-			emptyTurn(),
+			reasoningOnlyTurn(),
+			reasoningOnlyTurn(),
 			toolTurn("call-1", "read_file", `{"path":"notes.txt"}`), // resets counter
-			emptyTurn(),
-			emptyTurn(),
+			reasoningOnlyTurn(),
+			reasoningOnlyTurn(),
 			textTurn("done"),
 		},
 	}
@@ -453,5 +465,93 @@ func TestRunInjectsToolFailureHintWithSchema(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected a tool-failure hint on the 3rd turn, messages: %+v", provider.requests[2].Messages)
+	}
+}
+
+// A provider-empty stream (clean completion carrying nothing at all) is
+// retried in-turn with backoff before it may count as a no-output strike; when
+// the backend keeps answering empty, the run stops with a message that names
+// the PROVIDER fault — not the generic "agent made no progress" text. This is
+// the exact live failure observed on the ollama cloud relay (HTTP 200 in ~1s,
+// SSE straight to [DONE]), which silently killed 56% of sessions on the
+// reporting machine.
+func TestRunRetriesProviderEmptyStreamsThenStopsWithProviderMessage(t *testing.T) {
+	turns := make([][]zeroruntime.StreamEvent, 0, 9)
+	for i := 0; i < 9; i++ { // 3 strikes × (1 initial + 2 in-turn retries)
+		turns = append(turns, emptyTurn())
+	}
+	provider := &mockProvider{turns: turns}
+
+	result, err := Run(context.Background(), "go", provider, Options{
+		Registry: tools.NewRegistry(),
+		MaxTurns: 12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRequests := maxEmptyTurns * (1 + maxEmptyStreamRetries)
+	if len(provider.requests) != wantRequests {
+		t.Fatalf("expected %d requests (%d strikes × %d attempts), got %d",
+			wantRequests, maxEmptyTurns, 1+maxEmptyStreamRetries, len(provider.requests))
+	}
+	if !strings.Contains(result.FinalAnswer, "provider returned an empty response") {
+		t.Fatalf("expected the provider-empty stop message, got %q", result.FinalAnswer)
+	}
+	if strings.Contains(result.FinalAnswer, noOutputStopMarker) {
+		t.Fatalf("provider fault must not be reported as generic agent no-progress: %q", result.FinalAnswer)
+	}
+	if !IsNoProgressStop(result.FinalAnswer) {
+		t.Fatal("the provider-empty stop answer must be recognized by IsNoProgressStop (titling/resume filters)")
+	}
+}
+
+// A transient empty response recovers on the in-turn retry: no strike, no stop,
+// the retried turn's real output is the answer.
+func TestRunRecoversWhenEmptyStreamRetrySucceeds(t *testing.T) {
+	provider := &mockProvider{
+		turns: [][]zeroruntime.StreamEvent{
+			emptyTurn(),           // initial attempt: backend hiccup
+			textTurn("recovered"), // in-turn retry gets the real answer
+		},
+	}
+
+	result, err := Run(context.Background(), "go", provider, Options{
+		Registry: tools.NewRegistry(),
+		MaxTurns: 12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected 2 requests (initial + one retry), got %d", len(provider.requests))
+	}
+	if result.FinalAnswer != "recovered" {
+		t.Fatalf("expected the retried turn's text as final answer, got %q", result.FinalAnswer)
+	}
+	if result.Turns != 1 {
+		t.Fatalf("an in-turn retry is the SAME turn, want 1 turn, got %d", result.Turns)
+	}
+}
+
+// Mixed strikes (provider-empty + behavioral reasoning-only) must NOT claim a
+// provider fault — the generic no-output message stays.
+func TestRunMixedEmptyTurnsKeepGenericStopMessage(t *testing.T) {
+	provider := &mockProvider{
+		turns: [][]zeroruntime.StreamEvent{
+			reasoningOnlyTurn(),                   // strike 1: behavioral
+			emptyTurn(), emptyTurn(), emptyTurn(), // strike 2: provider-empty ×(1+2 retries)
+			reasoningOnlyTurn(), // strike 3: behavioral
+		},
+	}
+
+	result, err := Run(context.Background(), "go", provider, Options{
+		Registry: tools.NewRegistry(),
+		MaxTurns: 12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.FinalAnswer, noOutputStopMarker) {
+		t.Fatalf("mixed strikes must use the generic no-output message, got %q", result.FinalAnswer)
 	}
 }

@@ -55,6 +55,22 @@ func stallRetryNoticeFor(options Options) reconnectNotifier {
 	}
 }
 
+// emptyRetryNoticeFor builds a notifier for the loop's provider-empty retry
+// (a stream that completed cleanly but carried NOTHING — no text, no tool
+// calls, no reasoning). Distinct wording from the stall notice because nothing
+// timed out: the backend answered instantly with an empty completion (observed
+// on the ollama cloud relay under load, and possible on any gateway having a
+// bad moment). Surfaced through OnReasoning, the non-content channel. Nil when
+// there is no reasoning sink (the retry still happens silently).
+func emptyRetryNoticeFor(options Options) reconnectNotifier {
+	if options.OnReasoning == nil {
+		return nil
+	}
+	return func(attempt, max int) {
+		options.OnReasoning(fmt.Sprintf("\n[provider returned an empty response — retrying %d/%d…]\n", attempt, max))
+	}
+}
+
 // streamWithReconnect issues request via provider.StreamCompletion and, on a
 // transient disconnect error, retries the connect up to maxStreamReconnects
 // times with exponential backoff. It returns the live stream on success, or the

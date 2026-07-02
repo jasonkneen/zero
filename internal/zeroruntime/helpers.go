@@ -21,6 +21,12 @@ type CollectedStream struct {
 	// thinking blocks) that must be replayed on the next turn. Empty for providers
 	// or runs without extended thinking.
 	ReasoningBlocks []ReasoningBlock
+	// ReasoningEmitted reports that the stream carried ANY reasoning signal
+	// (live reasoning deltas or preserved blocks). It distinguishes "the model
+	// thought but produced no answer" (a behavioral empty turn) from "the
+	// provider returned a contentless stream" (a transport/backend fault worth
+	// retrying) — the two need different handling in the agent loop.
+	ReasoningEmitted bool
 }
 
 // Truncated reports whether the response ended for a non-normal reason (the
@@ -120,6 +126,7 @@ func CollectStreamWithOptions(ctx context.Context, events <-chan StreamEvent, op
 			// accumulate them regardless of type so they survive for replay.
 			if len(event.ReasoningBlocks) > 0 {
 				collected.ReasoningBlocks = append(collected.ReasoningBlocks, event.ReasoningBlocks...)
+				collected.ReasoningEmitted = true
 			}
 
 			switch event.Type {
@@ -132,6 +139,9 @@ func CollectStreamWithOptions(ctx context.Context, events <-chan StreamEvent, op
 					options.OnText(event.Content)
 				}
 			case StreamEventReasoning:
+				if event.Content != "" {
+					collected.ReasoningEmitted = true
+				}
 				if options.OnReasoning != nil {
 					options.OnReasoning(event.Content)
 				}

@@ -27,6 +27,14 @@ const maxTurnsFinalAnswerPrompt = "You have reached the tool-turn limit. Do not 
 // safe recovery for a stalled/dead pooled connection.
 const maxStreamStallRetries = 2
 
+// maxEmptyStreamRetries caps in-turn re-issues of a request whose stream
+// completed cleanly but carried nothing at all (providerEmptyStream). Observed
+// live on the ollama cloud relay under load: HTTP 200 in ~1s with an SSE that
+// goes straight to [DONE]. The condition is transient backend state, so a
+// short backoff-retry usually recovers; without it three such responses
+// arrived inside two seconds and killed the run via the no-output guard.
+const maxEmptyStreamRetries = 2
+
 const (
 	toolResultMetaControl       = "control"
 	toolResultControlSpecReview = "spec_review_required"
@@ -324,6 +332,35 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 			}
 			collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, forwardingOpts)
 		}
+		// Provider-empty retry: the stream completed CLEANLY but carried nothing
+		// — no text, no tool calls, no reasoning. That is not model behavior (a
+		// generating model always leaves some trace); it is a backend answering
+		// with a contentless completion (seen on the ollama cloud relay under
+		// load: 200 + instant [DONE]). Transient, so re-issue with backoff before
+		// letting it count as a no-output strike. Nothing from the empty stream
+		// was forwarded or committed to history, so the retry is clean.
+		for attempt := 1; attempt <= maxEmptyStreamRetries &&
+			collected.Error == "" && !forwardedVisibleText &&
+			providerEmptyStream(collected); attempt++ {
+			if notify := emptyRetryNoticeFor(options); notify != nil {
+				notify(attempt, maxEmptyStreamRetries)
+			}
+			if err := sleepWithContext(ctx, backoffFor(attempt)); err != nil {
+				result.Messages = copyMessages(messages)
+				return result, err
+			}
+			retryRequest := zeroruntime.CompletionRequest{
+				Messages:        copyMessages(messages),
+				Tools:           exposed,
+				ReasoningEffort: options.ReasoningEffort,
+			}
+			retryStream, retryErr := streamWithReconnect(ctx, provider, retryRequest, reconnectNoticeFor(options))
+			if retryErr != nil {
+				result.Messages = copyMessages(messages)
+				return result, retryErr
+			}
+			collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, forwardingOpts)
+		}
 		if collected.Error != "" {
 			// Route a reissued stream's non-stall error through the SAME recovery as
 			// the initial stream (image-rejection wrapping / context-limit compaction)
@@ -370,6 +407,15 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 			// A truly-empty turn (no text, no tool calls, no dropped calls) is
 			// counted toward the runaway cap so we stop before burning maxTurns.
 			if guards.observeTurn(collected) {
+				// Every strike being a provider-empty stream means the BACKEND
+				// failed repeatedly (each attempt already retried with backoff
+				// above) — say so, instead of the generic no-progress message
+				// that reads as the agent giving up.
+				if guards.allEmptyTurnsProviderEmpty() {
+					result.FinalAnswer = providerEmptyStopAnswer(result.Turns)
+					result.Messages = copyMessages(messages)
+					return result, nil
+				}
 				result.FinalAnswer = noOutputStopAnswer(result.Turns)
 				result.Messages = copyMessages(messages)
 				return result, nil
