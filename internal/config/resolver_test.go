@@ -1624,3 +1624,28 @@ func TestNormalizeWithoutModelDefaultsStillRequiresGoogleModel(t *testing.T) {
 		t.Fatalf("error = %q, want an actionable config.json hint", err.Error())
 	}
 }
+
+// The residual requires-model failure (custom endpoint, no catalog default)
+// must be tagged setup-fixable WITHOUT changing its message: the interactive
+// TUI matches the sentinel to drop into the wizard, while headless commands
+// print the exact actionable text.
+func TestResolveRequiresModelErrorIsSetupFixable(t *testing.T) {
+	path := writeConfig(t, `{
+		"activeProvider": "gw",
+		"providers": [{"name": "gw", "provider_kind": "openai-compatible", "baseURL": "https://gw.example/v1", "apiKey": "sk-x"}]
+	}`)
+	_, err := Resolve(ResolveOptions{UserConfigPath: path, Env: map[string]string{}})
+	if err == nil {
+		t.Fatal("expected requires-model error for a custom endpoint without model")
+	}
+	if !errors.Is(err, ErrProviderRequiresModel) {
+		t.Fatalf("error = %v, want errors.Is(err, ErrProviderRequiresModel)", err)
+	}
+	// The sentinel must NOT prefix the user-facing message.
+	if !strings.HasPrefix(err.Error(), "provider gw requires model") {
+		t.Fatalf("message = %q, want it to start with the provider error, not the sentinel text", err.Error())
+	}
+	if strings.Contains(err.Error(), "sk-x") {
+		t.Fatalf("error leaked API key: %q", err.Error())
+	}
+}

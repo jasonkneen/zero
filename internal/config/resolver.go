@@ -20,6 +20,26 @@ import (
 // onboarding" (drop into the setup wizard) rather than a fatal config error.
 var ErrNoActiveProvider = errors.New("no active provider configured")
 
+// ErrProviderRequiresModel marks a resolve failure caused solely by the active
+// provider missing a model with no catalog default to fall back on (custom
+// openai-/anthropic-compatible endpoints — Zero cannot guess a gateway's model).
+// Like ErrNoActiveProvider, the interactive TUI treats it as "needs onboarding"
+// and drops into the setup wizard so the user can fix it; headless commands
+// (zero config, zero exec) still fail with the actionable message.
+var ErrProviderRequiresModel = errors.New("provider requires model")
+
+// setupFixableError tags an error with a sentinel for errors.Is WITHOUT
+// changing its message: the sentinel's own text must not prefix what the user
+// sees (the wrapped message is already complete and actionable).
+type setupFixableError struct {
+	err      error
+	sentinel error
+}
+
+func (e *setupFixableError) Error() string { return e.err.Error() }
+
+func (e *setupFixableError) Unwrap() []error { return []error{e.err, e.sentinel} }
+
 // defaultMaxTurns is the per-run tool-turn budget when none is configured. 30 was
 // too low for real multi-step agentic work (agents ran out mid-task before reaching
 // later steps); 50 matches the old "deep" preset. Raise per-session with /turns.
@@ -808,7 +828,10 @@ func normalizeProvidersWithOptions(providers []ProviderProfile, activeName strin
 		return nil, ProviderProfile{}, fmt.Errorf("%w: active provider %q not found", ErrNoActiveProvider, activeName)
 	}
 	if active.Model == "" {
-		return nil, ProviderProfile{}, providerError(active, "provider %s requires model — add \"model\" to its entry in config.json, or re-run: zero setup <catalog-id> --model <model>", active.Name)
+		return nil, ProviderProfile{}, &setupFixableError{
+			err:      providerError(active, "provider %s requires model — add \"model\" to its entry in config.json, or re-run: zero setup <catalog-id> --model <model>", active.Name),
+			sentinel: ErrProviderRequiresModel,
+		}
 	}
 
 	return normalized, active, nil
