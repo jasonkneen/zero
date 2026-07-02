@@ -14,6 +14,7 @@
 package tui
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,7 +44,13 @@ type fileViewState struct {
 // openFileView activates the drill-in for path in diff mode. Opening from an
 // already-open view (clicking another FILES row) keeps the original saved chat
 // scroll position rather than saving the file view's own offset as "parent".
+// Re-opening the file that is ALREADY being viewed is a no-op: a stray
+// re-click must not bounce the user from full mode back to diff or reset
+// their scroll position.
 func (m model) openFileView(path string) model {
+	if m.fileView.active && m.fileView.path == path {
+		return m
+	}
 	if !m.fileView.active {
 		m.fileView.parentScrollOffset = m.chatScrollOffset
 	}
@@ -163,15 +170,30 @@ func (m model) renderFileViewFull(width int) string {
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(m.cwd, target)
 	}
-	data, err := os.ReadFile(target)
+	// Stream the read and stop at the cap: os.ReadFile would load a multi-GB
+	// file wholesale before any truncation, which is the exact render freeze
+	// fileViewMaxLines exists to prevent.
+	file, err := os.Open(target)
 	if err != nil {
 		return zeroTheme.faint.Render("Could not read file: " + err.Error())
 	}
-	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
-	truncated := 0
-	if len(lines) > fileViewMaxLines {
-		truncated = len(lines) - fileViewMaxLines
-		lines = lines[:fileViewMaxLines]
+	defer file.Close()
+	var lines []string
+	truncated := false
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		if len(lines) == fileViewMaxLines {
+			truncated = true
+			break
+		}
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		if len(lines) == 0 {
+			return zeroTheme.faint.Render("Could not read file: " + err.Error())
+		}
+		truncated = true // e.g. a single over-long line mid-file: show what we have
 	}
 
 	changed := m.fileViewChangedLines()
@@ -199,15 +221,20 @@ func (m model) renderFileViewFull(width int) string {
 		b.WriteString(marker)
 		b.WriteString(line)
 	}
-	if truncated > 0 {
+	if truncated {
+		// No exact remaining-line count: computing one would require reading the
+		// rest of the file, defeating the bounded read above.
 		b.WriteString("\n")
-		b.WriteString(zeroTheme.faint.Render(fmt.Sprintf("… %d more lines (file truncated for display)", truncated)))
+		b.WriteString(zeroTheme.faint.Render(fmt.Sprintf("… more lines (file truncated at %d for display)", len(lines))))
 	}
 	return b.String()
 }
 
 // fileViewChangedLines collects the trimmed text of every line the session's
-// diffs ADDED to the viewed file, for the full-mode gutter markers.
+// diffs ADDED to the viewed file, for the full-mode gutter markers. Very short
+// lines ("}", "return", ")") are skipped: text-matching them would mark every
+// unrelated occurrence across the file, which misleads far more than a missing
+// marker on a brace line ever could.
 func (m model) fileViewChangedLines() map[string]bool {
 	changed := map[string]bool{}
 	for _, row := range m.fileViewResultRows() {
@@ -215,7 +242,7 @@ func (m model) fileViewChangedLines() map[string]bool {
 			if !strings.HasPrefix(line, "+") || strings.HasPrefix(line, "+++") {
 				continue
 			}
-			if text := strings.TrimSpace(strings.TrimPrefix(line, "+")); text != "" {
+			if text := strings.TrimSpace(strings.TrimPrefix(line, "+")); len(text) >= 4 {
 				changed[text] = true
 			}
 		}

@@ -230,3 +230,88 @@ func TestTruncatePathLeft(t *testing.T) {
 		t.Errorf("want …/sidebar.go, got %q", got)
 	}
 }
+
+// TestTouchedFilesPerFileDiffStat: a multi-file result (apply_patch spanning
+// several files) must charge each file its OWN +/- counts from the per-file
+// diff sections — not the whole patch's totals to every file it touched.
+func TestTouchedFilesPerFileDiffStat(t *testing.T) {
+	m := sidebarTestModel()
+	patch := "diff --git a/web/one.js b/web/one.js\n" +
+		"--- a/web/one.js\n+++ b/web/one.js\n@@ -1,1 +1,2 @@\n+added one\n+added two\n" +
+		"diff --git a/web/two.js b/web/two.js\n" +
+		"--- a/web/two.js\n+++ b/web/two.js\n@@ -1,2 +1,1 @@\n-gone one\n-gone two\n-gone three\n"
+	m.transcript = append(m.transcript, transcriptRow{
+		kind: rowToolResult, tool: "apply_patch", id: "p1", status: tools.StatusOK,
+		detail:       patch,
+		changedFiles: []string{"web/one.js", "web/two.js"},
+	})
+	byPath := map[string]touchedFile{}
+	for _, f := range m.touchedFiles() {
+		byPath[f.path] = f
+	}
+	if f := byPath["web/one.js"]; f.adds != 2 || f.dels != 0 {
+		t.Errorf("web/one.js = +%d −%d, want its own +2 −0 (not the patch totals)", f.adds, f.dels)
+	}
+	if f := byPath["web/two.js"]; f.adds != 0 || f.dels != 3 {
+		t.Errorf("web/two.js = +%d −%d, want its own +0 −3 (not the patch totals)", f.adds, f.dels)
+	}
+}
+
+// TestTouchedFilesRetouchOrdersByLastTouch: touch a, then b, then a again — a
+// must list first. The old "reverse first-seen order" put b first because a's
+// slot kept its original position.
+func TestTouchedFilesRetouchOrdersByLastTouch(t *testing.T) {
+	m := sidebarTestModel()
+	for _, step := range []struct{ id, path string }{
+		{"r1", "a.go"}, {"r2", "b.go"}, {"r3", "a.go"},
+	} {
+		m.transcript = append(m.transcript, transcriptRow{
+			kind: rowToolResult, tool: "edit_file", id: step.id, status: tools.StatusOK,
+			changedFiles: []string{step.path},
+		})
+	}
+	files := m.touchedFiles()
+	if len(files) != 2 || files[0].path != "a.go" {
+		t.Fatalf("the re-touched file must list first, got %+v", files)
+	}
+}
+
+// TestSidebarFileLinesOverflowExcludesLiveRow: when the live-writing file is
+// also a touched file, it renders as the pulse row and is skipped from the
+// list — the "+N more" trailer must not count that skipped entry.
+func TestSidebarFileLinesOverflowExcludesLiveRow(t *testing.T) {
+	m := sidebarTestModel()
+	for _, name := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+		m.transcript = append(m.transcript, transcriptRow{
+			kind: rowToolResult, tool: "edit_file", id: name, status: tools.StatusOK,
+			changedFiles: []string{name + ".go"},
+		})
+	}
+	// h.go (a touched file) is ALSO the live write: 7 listable files remain,
+	// 6 render, so the trailer is +1 — not +2 (which counted the skipped live row).
+	m.streamCallName = "edit_file"
+	m.streamCallDecoder = newStreamingDecoder()
+	m.streamCallDecoder.feed(`{"path":"h.go","content":"x`)
+
+	lines, _ := m.sidebarFileLines(34)
+	trailer := plainRender(t, lines[len(lines)-1])
+	if !strings.Contains(trailer, "+1 more") {
+		t.Fatalf("overflow must exclude the live row from the count, got %q", trailer)
+	}
+}
+
+// TestSidebarHasContentForLiveWrite: the sidebar counts an in-flight first
+// write as content, so the FILES pulse is visible before any result row lands.
+func TestSidebarHasContentForLiveWrite(t *testing.T) {
+	m := sidebarTestModel()
+	m.plan.steps = nil // drop the helper's seeded plan: no agents/plan/files now
+	if m.sidebarHasContent() {
+		t.Fatal("session without agents/plan/files should have no sidebar content")
+	}
+	m.streamCallName = "write_file"
+	m.streamCallDecoder = newStreamingDecoder()
+	m.streamCallDecoder.feed(`{"path":"web/new.css","content":"body{}`)
+	if !m.sidebarHasContent() {
+		t.Fatal("a live in-flight write must count as sidebar content")
+	}
+}

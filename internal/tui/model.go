@@ -1080,9 +1080,10 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleCtrlC()
 		case keyCtrl(msg, 'o'):
 			return m.toggleDetailedTranscript(), nil
-		case m.fileView.active && m.composerValue() == "" && (keyText(msg) == "d" || keyText(msg) == "f"):
+		case m.fileView.active && m.noBlockingModal() && m.composerValue() == "" && (keyText(msg) == "d" || keyText(msg) == "f"):
 			// Mode toggle for the file drill-in, only while the composer is empty
-			// so mid-sentence typing is never hijacked.
+			// (so mid-sentence typing is never hijacked) and no modal is up (so a
+			// permission prompt / ask-user / wizard keeps its own key handling).
 			if keyText(msg) == "f" {
 				return m.setFileViewMode(fileViewFull), nil
 			}
@@ -1112,8 +1113,11 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// File drill-in exits on Esc (returns to the chat at its saved scroll
-			// position); the file stays selected so a second Esc clears that.
-			if m.fileView.active {
+			// position); the file stays selected so a second Esc clears that. Only
+			// with no blocking modal up: Esc on a permission prompt / ask-user /
+			// wizard must reach THAT surface's deny/cancel handling below, not
+			// silently close the drill-in behind it.
+			if m.fileView.active && m.noBlockingModal() {
 				return m.exitFileView(), nil
 			}
 			if m.mcpCommandCancel != nil {

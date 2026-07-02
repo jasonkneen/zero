@@ -34,13 +34,35 @@ func TestParseGitPorcelain(t *testing.T) {
 	}
 }
 
+// TestParseGitNumstat feeds the exact `git diff --numstat -z` record shapes:
+// plain "added\tdeleted\tpath\0", binary "-\t-\tpath\0", and the rename form
+// "added\tdeleted\t\0preimage\0postimage\0" — the stats must key the postimage
+// (the path porcelain/changedFiles report), which the old newline parser lost
+// (plain --numstat brace-mangles renames, so they never matched a roster path).
 func TestParseGitNumstat(t *testing.T) {
-	stats := parseGitNumstat("12\t3\tweb/app.js\n-\t-\tassets/logo.png\n4\t0\told.go => pkg/new.go\n1\t1\tR\told.go -> pkg/new.go\n")
+	out := "12\t3\tweb/app.js\x00" +
+		"-\t-\tassets/logo.png\x00" +
+		"4\t0\t\x00old.go\x00pkg/new.go\x00" +
+		"1\t1\tweb/my file.js\x00" // -z paths are never quoted
+	stats := parseGitNumstat(out)
 	if got := stats["web/app.js"]; got != [2]int{12, 3} {
 		t.Errorf("web/app.js = %v, want [12 3]", got)
 	}
 	if _, ok := stats["assets/logo.png"]; ok {
 		t.Error("binary '-' entries must be skipped")
+	}
+	if got := stats["pkg/new.go"]; got != [2]int{4, 0} {
+		t.Errorf("renamed file must key the postimage path = %v, want [4 0]", got)
+	}
+	if _, ok := stats["old.go"]; ok {
+		t.Error("the rename preimage must not appear as its own entry")
+	}
+	if got := stats["web/my file.js"]; got != [2]int{1, 1} {
+		t.Errorf("path with spaces = %v, want [1 1] (no quoting in -z mode)", got)
+	}
+	// Truncated rename record (missing postimage) must not panic or mis-key.
+	if got := parseGitNumstat("4\t0\t\x00old.go"); len(got) != 0 {
+		t.Errorf("truncated rename record should be dropped, got %v", got)
 	}
 }
 
@@ -192,6 +214,26 @@ func TestGitSweepCmdAgainstRealRepo(t *testing.T) {
 	}
 	if f := byPath["tracked.txt"]; f.adds != 2 || f.dels != 0 {
 		t.Fatalf("tracked.txt numstat = +%d −%d, want +2 −0", f.adds, f.dels)
+	}
+
+	// A rename WITH edits: porcelain reports the new path, and the -z numstat
+	// rename record must resolve to the same (postimage) path so the diffstat
+	// actually attaches — the plain --numstat form brace-mangles the path and
+	// the counts were silently lost.
+	run("add", ".")
+	run("commit", "-q", "-m", "second")
+	run("mv", "tracked.txt", "renamed.txt")
+	write("renamed.txt", "one\ntwo\nthree\nfour\nfive\n")
+	renameSweep := gitSweepCmd(nil, dir, false)().(gitSweepMsg)
+	if !renameSweep.ok {
+		t.Fatal("rename sweep failed")
+	}
+	renamed := map[string]gitSweepFile{}
+	for _, f := range renameSweep.files {
+		renamed[f.path] = f
+	}
+	if f, ok := renamed["renamed.txt"]; !ok || f.adds != 1 {
+		t.Fatalf("renamed file should carry its numstat under the new path, got %+v", renameSweep.files)
 	}
 
 	// Not-a-repo → ok=false (the sweep latches off).

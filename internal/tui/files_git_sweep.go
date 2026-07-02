@@ -60,9 +60,13 @@ func gitSweepCmd(parent context.Context, cwd string, baseline bool) tea.Cmd {
 		}
 		files := parseGitPorcelain(status)
 		// Diffstat for tracked modifications; untracked files have no diff to
-		// stat. Best-effort: a failure (e.g. unborn HEAD in a fresh repo) keeps
-		// the file list with zero counts rather than dropping the sweep.
-		if numstat, err := defaultPRCommandRunner(ctx, cwd, "git", "diff", "HEAD", "--numstat"); err == nil {
+		// stat. -z makes the output machine-parseable: NUL-terminated records, no
+		// path quoting, and renames as explicit preimage/postimage fields instead
+		// of the brace-mangled "src/{old => new}" a plain --numstat emits (which
+		// would never match a porcelain path). Best-effort: a failure (e.g. unborn
+		// HEAD in a fresh repo) keeps the file list with zero counts rather than
+		// dropping the sweep.
+		if numstat, err := defaultPRCommandRunner(ctx, cwd, "git", "diff", "HEAD", "--numstat", "-z"); err == nil {
 			stats := parseGitNumstat(numstat)
 			for i := range files {
 				if counts, ok := stats[files[i].path]; ok {
@@ -118,12 +122,18 @@ func unquoteGitPath(path string) string {
 	return path
 }
 
-// parseGitNumstat parses `git diff --numstat` output ("added\tdeleted\tpath")
-// into path → [added, deleted]. Binary files report "-" and are skipped.
+// parseGitNumstat parses `git diff --numstat -z` output into path → [added,
+// deleted]. -z records are NUL-terminated "added\tdeleted\tpath"; a rename/copy
+// instead ends the counts record with an EMPTY path ("added\tdeleted\t") and
+// appends two more NUL-terminated fields, preimage then postimage — the stats
+// key is the postimage (the path porcelain/changedFiles report). Paths are
+// never quoted or brace-mangled in -z mode. Binary files report "-" counts and
+// are skipped.
 func parseGitNumstat(out string) map[string][2]int {
 	stats := map[string][2]int{}
-	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, "\t", 3)
+	fields := strings.Split(out, "\x00")
+	for i := 0; i < len(fields); i++ {
+		parts := strings.SplitN(fields[i], "\t", 3)
 		if len(parts) != 3 {
 			continue
 		}
@@ -133,10 +143,17 @@ func parseGitNumstat(out string) map[string][2]int {
 			continue
 		}
 		path := parts[2]
-		if to, _, found := cutRename(path); found {
-			path = to
+		if path == "" {
+			// Rename/copy record: the next two fields are preimage, postimage.
+			if i+2 >= len(fields) {
+				break // truncated output — drop the partial record
+			}
+			path = fields[i+2]
+			i += 2
 		}
-		stats[unquoteGitPath(path)] = [2]int{adds, dels}
+		if path != "" {
+			stats[path] = [2]int{adds, dels}
+		}
 	}
 	return stats
 }
@@ -196,15 +213,18 @@ func (m model) maybeGitSweep() (model, tea.Cmd) {
 }
 
 // gitTouchedFiles adapts the sweep results to the roster's touchedFile shape,
-// for merging under the transcript-derived entries (files_panel.go). No
-// transcript row backs them (lastRowIndex -1), so selecting one skips the
-// scroll/tint and the drill-in opens on the full file.
+// for merging under the transcript-derived entries (files_panel.go), newest
+// detection first — gitTouched upserts in first-seen order, so iterating it in
+// reverse keeps the merged FILES tail consistent with the roster's
+// newest-first ordering. No transcript row backs them (lastRowIndex -1), so
+// selecting one skips the scroll/tint and the drill-in opens on the full file.
 func (m model) gitTouchedFiles() []touchedFile {
 	if len(m.gitTouched) == 0 {
 		return nil
 	}
 	files := make([]touchedFile, 0, len(m.gitTouched))
-	for _, f := range m.gitTouched {
+	for i := len(m.gitTouched) - 1; i >= 0; i-- {
+		f := m.gitTouched[i]
 		files = append(files, touchedFile{
 			path:         f.path,
 			created:      f.created,

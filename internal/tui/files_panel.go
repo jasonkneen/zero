@@ -14,6 +14,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -50,6 +51,13 @@ func (m model) touchedFiles() []touchedFile {
 			continue
 		}
 		adds, dels := planDiffStat(row.detail)
+		// A multi-file result (apply_patch spanning several files) must not charge
+		// the WHOLE patch's totals to every file it touched — split the diff by its
+		// per-file headers and attribute each file its own counts.
+		var perFile map[string][2]int
+		if len(row.changedFiles) > 1 {
+			perFile = perFileDiffStats(row.detail)
+		}
 		for _, path := range row.changedFiles {
 			if path == "" {
 				continue
@@ -64,18 +72,27 @@ func (m model) touchedFiles() []touchedFile {
 				})
 				at = len(files) - 1
 			}
-			files[at].adds += adds
-			files[at].dels += dels
+			fileAdds, fileDels := adds, dels
+			if perFile != nil {
+				// Headers were found: use this file's own counts. A path the split
+				// couldn't attribute shows 0/0 rather than the inflated patch totals.
+				counts := perFile[path]
+				fileAdds, fileDels = counts[0], counts[1]
+			}
+			files[at].adds += fileAdds
+			files[at].dels += fileDels
 			files[at].edits++
 			files[at].failed = row.status == tools.StatusError
 			files[at].lastRowIndex = i
 		}
 	}
 	// Most recently touched first: the file being worked on now belongs at the
-	// top, like the sidebar's ACTIVITY feed.
-	for left, right := 0, len(files)-1; left < right; left, right = left+1, right-1 {
-		files[left], files[right] = files[right], files[left]
-	}
+	// top, like the sidebar's ACTIVITY feed. Sorted by last touch (not reversed
+	// first-seen order): a file touched early and touched again last must list
+	// first. Stable, so same-row files keep their changedFiles order.
+	sort.SliceStable(files, func(i, j int) bool {
+		return files[i].lastRowIndex > files[j].lastRowIndex
+	})
 	// Merge the git sweep's discoveries (bash/subagent mutations that carry no
 	// changedFiles — files_git_sweep.go) below the transcript-derived entries,
 	// skipping paths a tool result already reported.
@@ -86,6 +103,53 @@ func (m model) touchedFiles() []touchedFile {
 		files = append(files, f)
 	}
 	return files
+}
+
+// perFileDiffStats splits a (possibly multi-file) unified diff into per-path
+// +added/−removed counts, keyed by the workspace-relative path from each
+// section's "+++ b/…" header (the "--- a/…" old side when the new side is
+// /dev/null, i.e. a deletion). Returns nil when the detail carries no file
+// headers at all (write_file/edit_file previews may be bare hunks) — the caller
+// then falls back to whole-detail totals, which are correct for a single file.
+func perFileDiffStats(detail string) map[string][2]int {
+	stats := map[string][2]int{}
+	current, oldPath := "", ""
+	normalize := func(line string, prefix string) string {
+		path := strings.TrimSpace(line[4:])
+		if tab := strings.IndexByte(path, '\t'); tab >= 0 {
+			path = path[:tab] // unified-diff convention: optional timestamp after a tab
+		}
+		path = unquoteGitPath(path)
+		if path == "/dev/null" {
+			return ""
+		}
+		return strings.TrimPrefix(path, prefix)
+	}
+	for _, line := range strings.Split(detail, "\n") {
+		switch {
+		case strings.HasPrefix(line, "--- "):
+			oldPath = normalize(line, "a/")
+		case strings.HasPrefix(line, "+++ "):
+			current = normalize(line, "b/")
+			if current == "" {
+				current = oldPath // deletion: charge the removed lines to the old path
+			}
+		case current == "":
+			// Lines before the first header (or in an unattributable section).
+		case strings.HasPrefix(line, "+"):
+			counts := stats[current]
+			counts[0]++
+			stats[current] = counts
+		case strings.HasPrefix(line, "-"):
+			counts := stats[current]
+			counts[1]++
+			stats[current] = counts
+		}
+	}
+	if len(stats) == 0 {
+		return nil
+	}
+	return stats
 }
 
 // resultRowCreatedFile reports whether a tool-result row reads as a file
@@ -149,13 +213,19 @@ func (m model) sidebarFileLines(width int) ([]string, []fileHit) {
 			zeroTheme.ink.Render(truncatePathLeft(live, room)))
 	}
 
-	shown := 0
+	// Filter the live row out FIRST so the "+N more" trailer counts only rows
+	// that could actually render — counting the skipped live entry would inflate
+	// the overflow by one.
+	visible := files[:0:0]
 	for _, f := range files {
-		if f.path == live {
-			continue // already shown as the live row
+		if f.path != live {
+			visible = append(visible, f)
 		}
+	}
+	shown := 0
+	for _, f := range visible {
 		if shown >= maxSidebarFiles {
-			lines = append(lines, "   "+zeroTheme.faint.Render(fmt.Sprintf("+%d more", len(files)-shown)))
+			lines = append(lines, "   "+zeroTheme.faint.Render(fmt.Sprintf("+%d more", len(visible)-shown)))
 			break
 		}
 		shown++

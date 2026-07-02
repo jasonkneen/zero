@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/Gitlawb/zero/internal/agent"
 	"github.com/Gitlawb/zero/internal/sessions"
 	"github.com/Gitlawb/zero/internal/tools"
 )
@@ -209,5 +211,78 @@ func TestChangedFilesRehydration(t *testing.T) {
 	got := rows[0].changedFiles
 	if len(got) != 2 || got[0] != "pkg/a.go" || got[1] != "pkg/b.go" {
 		t.Fatalf("changedFiles not rehydrated: %v", got)
+	}
+}
+
+// TestOpenFileViewSamePathIsNoOp: re-clicking the FILES row of the file already
+// being viewed must not clobber the user's mode or scroll — the old
+// unconditional openFileView bounced full mode back to diff and reset scroll.
+func TestOpenFileViewSamePathIsNoOp(t *testing.T) {
+	m := filesPanelTestModel()
+	m = m.openFileView("web/app.js")
+	m = m.setFileViewMode(fileViewFull)
+	m.chatScrollOffset = 7 // scrolled within the file body
+
+	m = m.openFileView("web/app.js")
+	if m.fileView.mode != fileViewFull {
+		t.Fatal("re-opening the same file must keep full mode")
+	}
+	if m.chatScrollOffset != 7 {
+		t.Fatalf("re-opening the same file must keep the scroll, got %d", m.chatScrollOffset)
+	}
+	// A DIFFERENT file still switches (and resets to diff mode as documented).
+	m = m.openFileView("internal/tui/sidebar.go")
+	if m.fileView.path != "internal/tui/sidebar.go" || m.fileView.mode != fileViewDiff {
+		t.Fatalf("opening another file should switch views: %+v", m.fileView)
+	}
+}
+
+// TestFileViewFullBodyTruncatesLongFile: the full view stops reading at
+// fileViewMaxLines (bounded read — a giant file must not be loaded wholesale)
+// and appends the truncation trailer.
+func TestFileViewFullBodyTruncatesLongFile(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	for i := 0; i < fileViewMaxLines+50; i++ {
+		fmt.Fprintf(&b, "line %d\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := filesPanelTestModel()
+	m.cwd = dir
+	m.gitTouched = []gitSweepFile{{path: "big.txt"}}
+	m = m.openFileView("big.txt")
+
+	plain := plainRender(t, m.renderFileViewFull(80))
+	lines := strings.Split(plain, "\n")
+	if len(lines) != fileViewMaxLines+1 { // capped content + the trailer line
+		t.Fatalf("rendered %d lines, want %d content lines + 1 trailer", len(lines), fileViewMaxLines)
+	}
+	if !strings.Contains(lines[len(lines)-1], "truncated") {
+		t.Fatalf("expected the truncation trailer, got %q", lines[len(lines)-1])
+	}
+}
+
+// TestFileViewKeysDeferToBlockingModal: with a permission prompt up, Esc and
+// the d/f shortcuts belong to the prompt — the drill-in must not swallow them
+// (Esc exiting the view instead of reaching the prompt's deny handling).
+func TestFileViewKeysDeferToBlockingModal(t *testing.T) {
+	m := filesPanelTestModel()
+	m = m.openFileView("web/app.js")
+	m.pendingPermission = &pendingPermissionPrompt{
+		request: agent.PermissionRequest{ToolName: "write_file"},
+		decide:  func(agent.PermissionDecision) {},
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	m = updated.(model)
+	if m.fileView.mode != fileViewDiff {
+		t.Fatal("f with a permission prompt up must not switch file-view modes")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(model)
+	if !m.fileView.active {
+		t.Fatal("Esc with a permission prompt up must not exit the file view")
 	}
 }
