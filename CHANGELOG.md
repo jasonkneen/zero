@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once the first release is
 tagged. Until then, source builds report the version `dev`.
 
+## [0.2.0](https://github.com/Gitlawb/zero/compare/v0.1.0...v0.2.0) (2026-07-02)
+
+
+### Features
+
+* **providers:** add `zero providers models` to discover a provider's models ([#386](https://github.com/Gitlawb/zero/issues/386)) ([0bc8074](https://github.com/Gitlawb/zero/commit/0bc8074c97b0310e4a9d70c3f967003ee5e8a59f))
+* **providers:** add KiloCode and OpenCode provider support ([#388](https://github.com/Gitlawb/zero/issues/388)) ([b1ccb6d](https://github.com/Gitlawb/zero/commit/b1ccb6d9c1875377f5e5ea81a1304edd1e41ab4f))
+* require manual approval before npm publish + drop release-as pin ([#369](https://github.com/Gitlawb/zero/issues/369)) ([bd89a1f](https://github.com/Gitlawb/zero/commit/bd89a1f451643c1b65ec803070abc7b116631ebe))
+
+
+### Bug Fixes
+
+* **config:** unbrick first-run setup — default google/anthropic models, enter setup on fixable config errors ([#385](https://github.com/Gitlawb/zero/issues/385)) ([72eed06](https://github.com/Gitlawb/zero/commit/72eed06b4f94c43d75d31fe54a58d2f566de059e))
+* **config:** use ~/.config on macOS and enter setup when no provider ([#371](https://github.com/Gitlawb/zero/issues/371)) ([#372](https://github.com/Gitlawb/zero/issues/372)) ([027a8f2](https://github.com/Gitlawb/zero/commit/027a8f2768b17b89f5c8270887f156e2ccda69ea))
+* **gemini:** strip unsupported JSON Schema fields from tool declarations ([#374](https://github.com/Gitlawb/zero/issues/374)) ([39e7100](https://github.com/Gitlawb/zero/commit/39e7100674150144a1152e3110c64c7cf0321d64)), closes [#373](https://github.com/Gitlawb/zero/issues/373)
+* **tools:** CRLF line ending mismatch in edit_file tool on Windows ([#378](https://github.com/Gitlawb/zero/issues/378)) ([33dc7ae](https://github.com/Gitlawb/zero/commit/33dc7ae2cc82c5389675531e1416856dae7151ce))
+* **tools:** require permission before web_search requests ([#382](https://github.com/Gitlawb/zero/issues/382)) ([960db96](https://github.com/Gitlawb/zero/commit/960db9660e4e31dc588fe8f7d6f116ff5e225566))
+
 ## 0.1.0 (2026-07-02)
 
 
