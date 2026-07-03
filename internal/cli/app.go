@@ -23,6 +23,7 @@ import (
 	"github.com/Gitlawb/zero/internal/observability"
 	"github.com/Gitlawb/zero/internal/plugins"
 	"github.com/Gitlawb/zero/internal/providerhealth"
+	"github.com/Gitlawb/zero/internal/providermodeldiscovery"
 	"github.com/Gitlawb/zero/internal/provideronboarding"
 	"github.com/Gitlawb/zero/internal/providers"
 	"github.com/Gitlawb/zero/internal/redaction"
@@ -54,9 +55,10 @@ type appDeps struct {
 	// config.SetActiveProviderEnv, set in defaultAppDeps — deliberately NOT filled
 	// by fillAppDeps, so tests never mutate the process environment unless they
 	// inject it). nil ⇒ no export.
-	exportActiveProvider func(providerName string)
-	probeProviderHealth  func(context.Context, providerhealth.Options) providerhealth.Result
-	detectLocalRuntimes  func(context.Context, provideronboarding.LocalDetectOptions) []provideronboarding.DetectedLocalRuntime
+	exportActiveProvider   func(providerName string)
+	probeProviderHealth    func(context.Context, providerhealth.Options) providerhealth.Result
+	discoverProviderModels func(context.Context, config.ProviderProfile) ([]providermodeldiscovery.Model, error)
+	detectLocalRuntimes    func(context.Context, provideronboarding.LocalDetectOptions) []provideronboarding.DetectedLocalRuntime
 	// detectAgentCLIs probes the machine for installed agent-CLI harnesses
 	// (Claude Code, Codex, ...) — production: agentcli.Detect with the real
 	// (zero-value) Deps. Tests inject a fake so `zero auth status` and the
@@ -140,9 +142,10 @@ func defaultAppDeps() appDeps {
 				OAuthLoginKey: loginKey,
 			})
 		},
-		probeProviderHealth: providerhealth.Probe,
-		detectLocalRuntimes: provideronboarding.DetectLocalRuntimes,
-		detectAgentCLIs:     agentcli.Detect,
+		probeProviderHealth:    providerhealth.Probe,
+		discoverProviderModels: defaultDiscoverProviderModels,
+		detectLocalRuntimes:    provideronboarding.DetectLocalRuntimes,
+		detectAgentCLIs:        agentcli.Detect,
 		newSessionStore: func() *sessions.Store {
 			return sessions.NewStore(sessions.StoreOptions{})
 		},
@@ -409,6 +412,14 @@ func runWithDeps(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 		if _, err := fmt.Fprintf(stderr, "unknown command %q\n", args[0]); err != nil {
 			return 1
 		}
+		// First-run users reach for `zero login`/`zero logout` (reported in the
+		// wild); point them at the real command instead of a bare usage pointer.
+		switch strings.ToLower(args[0]) {
+		case "login", "logout":
+			if _, err := fmt.Fprintf(stderr, "did you mean %q?\n", "zero auth "+strings.ToLower(args[0])); err != nil {
+				return 1
+			}
+		}
 		if _, err := fmt.Fprintln(stderr, "Run zero --help for usage."); err != nil {
 			return 1
 		}
@@ -438,6 +449,9 @@ func fillAppDeps(deps appDeps) appDeps {
 	}
 	if deps.probeProviderHealth == nil {
 		deps.probeProviderHealth = defaults.probeProviderHealth
+	}
+	if deps.discoverProviderModels == nil {
+		deps.discoverProviderModels = defaults.discoverProviderModels
 	}
 	if deps.detectLocalRuntimes == nil {
 		deps.detectLocalRuntimes = defaults.detectLocalRuntimes
@@ -540,7 +554,21 @@ func runInteractiveTUIWithSetup(stderr io.Writer, deps appDeps, permissionMode a
 
 	resolved, err := deps.resolveConfig(workspaceRoot, config.Overrides{})
 	if err != nil {
-		return writeAppError(stderr, err.Error(), 1)
+		// A resolve failure the setup wizard can FIX is not fatal for the
+		// interactive TUI: drop into the wizard with an empty config so the user
+		// can onboard/repair, instead of exiting with an error they can only fix
+		// by hand-editing config.json. That covers a missing/unresolvable active
+		// provider and an active provider without a model (custom endpoints have
+		// no catalog default) — previously the second shape bricked bare `zero`
+		// and `zero setup`, the exact commands that could have fixed it. Any
+		// other error (malformed JSON, directory conflict, etc.) is still fatal,
+		// and headless commands (zero config / zero exec) still fail with the
+		// actionable message.
+		if !errors.Is(err, config.ErrNoActiveProvider) && !errors.Is(err, config.ErrProviderRequiresModel) {
+			return writeAppError(stderr, err.Error(), 1)
+		}
+		resolved = config.ResolvedConfig{}
+		forceSetup = true
 	}
 	userConfigPath, err := deps.userConfigPath()
 	if err != nil {

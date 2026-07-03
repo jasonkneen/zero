@@ -648,7 +648,7 @@ func newModel(ctx context.Context, options Options) model {
 		}
 	}
 
-	userConfigDir, _ := os.UserConfigDir()
+	userConfigDir, _ := config.UserConfigDir()
 	loadedUserCommands := usercommands.Load(usercommands.DefaultPaths(cwd, userConfigDir))
 
 	registry := options.Registry
